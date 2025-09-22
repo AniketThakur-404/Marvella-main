@@ -83,7 +83,7 @@ export default function Footer() {
               style={{ fontFamily: '"Cormorant Garamond", Georgia, "Times New Roman", serif' }}
               aria-label="Louis Vuitton wordmark"
             >
-            <img src={logo} alt="" className="h-5 w-auto lg:h-7" />
+            <img src={logo} alt="" className="h-5 w-auto lg:h-9" />
             </div>
           </div>
 
