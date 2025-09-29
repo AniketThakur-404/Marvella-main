@@ -66,7 +66,7 @@ const IntroVideo1 = () => {
       {/* Copy */}
       <div className="pointer-events-none absolute bottom-8 left-6 z-10 max-w-xl text-white sm:left-10 sm:bottom-10 md:bottom-14">
         <h2 className="pointer-events-auto mb-3 text-2xl font-semibold tracking-wide sm:text-3xl md:text-4xl">
-          LV Rouge Matte
+          Marvellè Beautè
         </h2>
         <p className="pointer-events-auto max-w-lg text-sm leading-relaxed text-white/85 sm:text-[15px]">
           Velvet matte color and intense longwear adorn lips with immediate

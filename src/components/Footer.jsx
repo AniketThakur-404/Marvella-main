@@ -36,7 +36,7 @@ export default function Footer() {
 
           {/* ABOUT */}
           <div>
-            <h6 className="text-[10px] tracking-[0.22em] uppercase text-neutral-500 mb-4">About Louis Vuitton</h6>
+            <h6 className="text-[10px] tracking-[0.22em] uppercase text-neutral-500 mb-4">About Marvellè Beautè</h6>
             <ul className="space-y-3 text-sm" style={{ fontFamily: '"Inter", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif' }}>
               <li><a href="#shows" className="hover:underline underline-offset-2">Fashion Shows</a></li>
               <li><a href="#arts" className="hover:underline underline-offset-2">Arts & Culture</a></li>
@@ -44,7 +44,7 @@ export default function Footer() {
               <li><a href="#sustainability" className="hover:underline underline-offset-2">Sustainability</a></li>
               <li><a href="#news" className="hover:underline underline-offset-2">Latest News</a></li>
               <li><a href="#careers" className="hover:underline underline-offset-2">Careers</a></li>
-              <li><a href="#foundation" className="hover:underline underline-offset-2">Foundation Louis Vuitton</a></li>
+              <li><a href="#foundation" className="hover:underline underline-offset-2">Foundation Marvellè Beautè</a></li>
             </ul>
           </div>
 
@@ -53,7 +53,7 @@ export default function Footer() {
             <h6 className="text-[10px] tracking-[0.22em] uppercase text-neutral-500 mb-4">Email sign-up</h6>
             <p className="text-sm leading-7" style={{ fontFamily: '"Inter", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif' }}>
               <a href="#signup" className="underline underline-offset-2 hover:no-underline">Sign up</a>{" "}
-              for Louis Vuitton emails and receive the latest news from the Maison, including exclusive online pre-launches and new collections
+              for Marvellè Beautè emails and receive the latest news from the Maison, including exclusive online pre-launches and new collections
             </p>
             <a href="#follow" className="mt-6 inline-block text-sm hover:underline underline-offset-2" style={{ fontFamily: '"Inter", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif' }}>
               Follow Us

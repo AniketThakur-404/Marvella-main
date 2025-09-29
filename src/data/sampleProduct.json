@@ -1,0 +1,122 @@
+{
+  "id": "marvelle-luxe-matte-lipstick",
+  "title": "Luxe Matte Lipstick",
+  "subtitle": "Feather-light. Full-pigment. All-day comfort.",
+  "categoryPath": ["Makeup", "Lips", "Lipstick"],
+  "longDescription": "A nourishing glaze that hydrates and replenishes. It feels like a thick glaze that glides on smoothly and smells like a fresh strawberry glazed donut. Good for all skin types, this product is Cruelty-Free, Vegan, Gluten-Free, and Dermatologist-Tested. Winner of the 2022 Allure Best of Beauty Award for Best Untinted Lip Balm.",
+  "videoUrl": "intro1.mp4",
+
+  "hero": {
+    "image": "product8.png",
+    "objectPosition": "68% 34%",
+    "bg": "#fff7f3",
+    "overlay": "linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.06) 100%)",
+    "wheelScrollSwitch": true
+  },
+
+  "theme": {
+    "defaultBg": "radial-gradient(80% 60% at 50% 0%, #faf7f2 0%, #f4efe9 45%, #efe9e2 100%)",
+    "bgScenes": {
+      "hero": "radial-gradient(80% 60% at 50% 10%, #fff7f3 0%, #ffe9e0 45%, #ffe1d4 100%)",
+      "features": "radial-gradient(80% 60% at 50% 10%, #f8f1ff 0%, #f3ecff 45%, #ece6ff 100%)",
+      "ingredients": "radial-gradient(80% 60% at 50% 10%, #f2fbff 0%, #e9f7ff 45%, #e6f4ff 100%)",
+      "video": "radial-gradient(80% 60% at 50% 10%, #0b0b0b 0%, #121212 65%, #171717 100%)",
+      "shades": "radial-gradient(80% 60% at 50% 10%, #fff8f1 0%, #fff2e5 45%, #ffecd9 100%)",
+      "reviews": "radial-gradient(80% 60% at 50% 10%, #f6f7ff 0%, #f0f2ff 45%, #eaecff 100%)"
+    },
+    "bgTone": {
+      "hero": "light",
+      "features": "light",
+      "ingredients": "light",
+      "video": "dark",
+      "shades": "light",
+      "reviews": "light"
+    }
+  },
+
+  "gallery": ["product1.png", "product8.png", "product3.png", "product4.png"],
+  "rating": 4.7,
+  "reviews": 328,
+  "mrp": 1299,
+  "price": 899,
+  "currency": "₹",
+  "discountText": "31% OFF",
+  "badges": ["Vegan", "Cruelty-Free", "Dermat Tested", "Paraben-Free"],
+
+  "shades": [
+    {
+      "key": "rosewood",
+      "name": "Rosewood 01",
+      "hex": "#8a4040",
+      "thumb": "product8.png",
+      "desc": "A deep and elegant rosewood, perfect for a sophisticated look that complements medium to deep skin tones with neutral or warm undertones.A deep and elegant rosewood, perfect for a sophisticated look that complements medium to deep skin tones with neutral or warm undertones."
+    },
+    {
+      "key": "peach",
+      "name": "Soft Peach 02",
+      "hex": "#e7a28d",
+      "thumb": "product2.png",
+      "desc": "A delicate and warm soft peach that brightens the complexion. Ideal for fair to medium skin tones, adding a touch of youthful vibrancy."
+    },
+    {
+      "key": "mauve",
+      "name": "Classic Mauve 03",
+      "hex": "#7c4a66",
+      "thumb": "product7.png",
+      "desc": "A timeless and versatile classic mauve with cool undertones. This shade is universally flattering and suitable for any occasion, from day to night."
+    }
+  ],
+
+  "benefits": [
+    "12-hour comfortable matte finish",
+    "Blurs the look of lines & texture",
+    "Non-drying, weightless feel",
+    "Transfer-minimized formula"
+  ],
+  "ingredients_highlight": [
+    { "name": "Squalane", "why": "locks in moisture for comfort" },
+    { "name": "Vitamin E", "why": "antioxidant protection & care" },
+    { "name": "Hyaluronic Filling Spheres", "why": "plush, pillowy feel" }
+  ],
+  "how_to_use": [
+    "Exfoliate lips gently and wipe clean.",
+    "Outline with the bullet tip and fill in the center.",
+    "Blot once with tissue; reapply for richer payoff."
+  ],
+  "claims": [
+    "93% agreed lips felt soft after 8 hours*",
+    "88% agreed the color looked even*",
+    "81% saw minimal transfer*"
+  ],
+  "disclaimer": "* consumer study, n=60, after 1 week of use",
+  "faqs": [
+    { "q": "Is it drying?", "a": "No. The formula includes emollients like squalane to keep lips comfortable." },
+    { "q": "Is it vegan?", "a": "Yes, it’s 100% vegan and cruelty-free." },
+    { "q": "Will it suit my skin tone?", "a": "Use the Shade Finder guide below—each shade lists undertone suggestions." }
+  ],
+  "reviewsList": [
+    {
+      "author": "Priya S.",
+      "rating": 5,
+      "title": "Finally, a matte that isn't drying!",
+      "comment": "I've tried so many matte lipsticks that leave my lips feeling like a desert. This one is completely different! It's so comfortable and the Rosewood shade is my new favorite.",
+      "date": "September 15, 2025"
+    },
+    {
+      "author": "Anjali K.",
+      "rating": 4,
+      "title": "Beautiful color, slightly less staying power",
+      "comment": "The Soft Peach color is stunning and perfect for daily wear. It feels amazing on the lips. I just wish it lasted a bit longer through meals, but it's easy enough to reapply.",
+      "date": "September 12, 2025"
+    },
+    {
+      "author": "Rohan M.",
+      "rating": 5,
+      "title": "Best lipstick I've ever bought",
+      "comment": "I bought the Classic Mauve for my wife and she absolutely loves it. She says the texture is incredible and it looks fantastic. 10/10 would recommend.",
+      "date": "September 10, 2025"
+    }
+  ],
+  "shipping": "Free shipping on orders above ₹499",
+  "returns": "Easy 7-day returns on unopened items."
+}

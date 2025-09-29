@@ -1,32 +1,32 @@
 import React, { useState } from "react";
 import { Heart, Video, ChevronLeft, ChevronRight } from "lucide-react";
-import image1 from "@/assets/images/product1.avif";
-import image2 from "@/assets/images/product2.avif";
-import image3 from "@/assets/images/product3.avif";
-import image4 from "@/assets/images/product4.avif";
-import image5 from "@/assets/images/product5.avif";
-import image6 from "@/assets/images/product6.avif";
-import image7 from "@/assets/images/product7.avif";
-import image8 from "@/assets/images/product8.avif";
-import image9 from "@/assets/images/product9.avif";
-import image10 from "@/assets/images/product10.avif";
-import image11 from "@/assets/images/product11.avif";
-import image12 from "@/assets/images/product12.avif";
+import image1 from "@/assets/images/product1.png";
+import image2 from "@/assets/images/product2.png";
+import image3 from "@/assets/images/product3.png";
+import image4 from "@/assets/images/product4.png";
+import image5 from "@/assets/images/product5.png";
+import image6 from "@/assets/images/product6.png";
+import image7 from "@/assets/images/product7.png";
+import image8 from "@/assets/images/product8.png";
+import image9 from "@/assets/images/product9.png";
+import image10 from "@/assets/images/product10.png";
+import image11 from "@/assets/images/product11.png";
+import image12 from "@/assets/images/product12.png";
 import bg from "@/assets/background/card-bg.svg";
 
 const products = [
-  { id: 1, image: image1, name: "LV Rouge - Satin Lipstick" },
-  { id: 2, image: image2, name: "LV Rouge - Satin Lipstick" },
-  { id: 3, image: image3, name: "LV Rouge - Satin Lipstick" },
-  { id: 4, image: image4, name: "LV Rouge - Satin Lipstick" },
-  { id: 5, image: image5, name: "LV Rouge - Satin Lipstick" },
-  { id: 6, image: image6, name: "LV Rouge - Satin Lipstick" },
-  { id: 7, image: image7, name: "LV Rouge - Satin Lipstick" },
-  { id: 8, image: image8, name: "LV Rouge - Satin Lipstick" },
-  { id: 9, image: image9, name: "LV Rouge - Satin Lipstick" },
-  { id: 10, image: image10, name: "LV Rouge - Satin Lipstick" },
-  { id: 11, image: image11, name: "LV Rouge - Satin Lipstick" },
-  { id: 12, image: image12, name: "LV Rouge - Satin Lipstick" },
+  { id: 1, image: image1, name: "Marvellè Beautè - Satin Lipstick" },
+  { id: 2, image: image2, name: "Marvellè Beautè - Satin Lipstick" },
+  { id: 3, image: image3, name: "Marvellè Beautè - Satin Lipstick" },
+  { id: 4, image: image4, name: "Marvellè Beautè - Satin Lipstick" },
+  { id: 5, image: image5, name: "Marvellè Beautè - Satin Lipstick" },
+  { id: 6, image: image6, name: "Marvellè Beautè - Satin Lipstick" },
+  { id: 7, image: image7, name: "Marvellè Beautè - Satin Lipstick" },
+  { id: 8, image: image8, name: "Marvellè Beautè - Satin Lipstick" },
+  { id: 9, image: image9, name: "Marvellè Beautè - Satin Lipstick" },
+  { id: 10, image: image10, name: "Marvellè Beautè - Satin Lipstick" },
+  { id: 11, image: image11, name: "Marvellè Beautè - Satin Lipstick" },
+  { id: 12, image: image12, name: "Marvellè Beautè - Satin Lipstick" },
 ];
 
 const INITIAL_VISIBLE = 4;

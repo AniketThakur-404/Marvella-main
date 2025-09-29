@@ -4,7 +4,7 @@ import image from '@/assets/images/image.webp'
 
 const HeroSection = ({
   label = "EXCLUSIVE PREORDER",
-  title = "Louis Vuitton Travels With Grace Coddington",
+  title = "Marvellè Beautè Travels With Grace Coddington",
   ctaText = "Discover the Collection",
   ctaHref = "#",
 }) => {
