@@ -4,11 +4,17 @@ import { FaceMesh } from "@mediapipe/face_mesh";
 
 /* ---------------- Lip landmark indices (MediaPipe) ---------------- */
 /* Single outer ring that surrounds both lips */
+/* ---------------- Lip landmark indices (MediaPipe) ---------------- */
+/* A more detailed outline of the full vermilion border of both lips */
 const LIP_OUTER_RING = [
-  61,146,91,181,84,17,314,405,321,375,291,308,324,318,402,317,14,87,178,88,95,78
+  61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405, 314, 17, 84,
+  181, 91, 146,
 ];
-/* Tight inner ring (mouth opening only). If this is too big, it “punches” the upper lip. */
-const LIP_INNER_RING = [78,95,88,178,87,14,317,402,318,324,308];
+/* A complete inner ring for the entire mouth opening */
+const LIP_INNER_RING = [
+  78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87,
+  178, 88, 95,
+];
 
 /* ---------------- Presets ---------------- */
 const PRESETS = [
