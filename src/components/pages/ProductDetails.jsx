@@ -1,4 +1,6 @@
+// src/components/pages/ProductDetails.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Star, StarHalf, Truck, ShieldCheck, Recycle, Sparkles,
   ShoppingCart, Heart, Share2, BadgeCheck, ChevronLeft, ChevronRight,
@@ -79,7 +81,7 @@ const ShadeDot = ({ hex, img, active, onClick, label }) => (
   </button>
 );
 
-/* Ultra-smooth crossfade (never overlaps artifacts during rapid changes) */
+/* Ultra-smooth crossfade (images ignore pointer events so clicks reach the chip) */
 function SmoothImage({ src, alt, className = "" }) {
   const [current, setCurrent] = useState(src || "");
   const [incoming, setIncoming] = useState("");
@@ -107,7 +109,7 @@ function SmoothImage({ src, alt, className = "" }) {
         <img
           src={current}
           alt={alt}
-          className="block h-full w-full object-cover will-change-transform"
+          className="pointer-events-none block h-full w-full object-cover will-change-transform"
           style={{ transform: "translateZ(0)" }}
           draggable={false}
         />
@@ -130,7 +132,7 @@ function SmoothImage({ src, alt, className = "" }) {
   );
 }
 
-/* Background cross-fader (string gradients → smooth) */
+/* Background cross-fader */
 function BackgroundFader({ background, duration = 1100, easing = "cubic-bezier(0.16,1,0.3,1)" }) {
   const [base, setBase] = useState(background);
   const [overlay, setOverlay] = useState(background);
@@ -264,7 +266,6 @@ export default function ProductDetails({ data }) {
 
   /* PDP images */
   const HERO = p.hero || {};
-  const heroPos = HERO.objectPosition || "50% 50%";
   const heroOverlay = HERO.overlay || "linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.06) 100%)";
   const gallery = useMemo(() => (Array.isArray(p.gallery) ? p.gallery.map(resolveAsset) : []), [p.gallery]);
   const [activeImage, _setActiveImage] = useState(0);
@@ -282,14 +283,18 @@ export default function ProductDetails({ data }) {
     gallery.forEach((src) => { const i = new Image(); i.src = src; });
   }, [gallery]);
 
-  // drag / swipe / wheel
+  // drag / swipe / wheel — but ignore interactive children so links work on desktop too
   const heroRef = useRef(null);
   useEffect(() => {
     const el = heroRef.current;
     if (!el) return;
     let startX = 0, startY = 0, dragging = false, startIdx = 0;
 
+    const isInteractive = (t) =>
+      !!(t && (t.closest?.("a,button,input,select,textarea,[role='button']")));
+
     const onPointerDown = (e) => {
+      if (isInteractive(e.target)) return;
       dragging = true;
       startX = e.clientX;
       startY = e.clientY;
@@ -310,6 +315,7 @@ export default function ProductDetails({ data }) {
       el.releasePointerCapture?.(e.pointerId);
     };
     const onWheel = (e) => {
+      if (isInteractive(e.target)) return;
       if (gallery.length < 2) return;
       e.preventDefault();
       const dir = Math.sign(e.deltaY);
@@ -437,7 +443,7 @@ export default function ProductDetails({ data }) {
       </div>
 
       {/* ===== HERO SECTION ===== */}
-      <div className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-8 md:py-12" data-bg-key="hero">
+      <div className="mx-auto w-full max-w-7xl mt-10 px-4 sm:px-6 lg:px-8 py-8 md:py-12" data-bg-key="hero">
         {/* breadcrumbs */}
         <nav className="text-xs mb-3 overflow-x-auto whitespace-nowrap text-[var(--fg-muted)]">
           {crumbs.length ? (
@@ -481,9 +487,32 @@ export default function ProductDetails({ data }) {
                     />
                   )}
                   {heroOverlay && <div className="absolute inset-0 pointer-events-none" style={{ background: heroOverlay }} />}
-                  {/* dots */}
+
+                  {/* bottom-right Try Virtually chip */}
+                  <Link
+                    to="/ar/lipstick"
+                    onClickCapture={(e) => e.stopPropagation()}
+                    className="absolute z-20 inline-flex items-center gap-1.5 rounded-full bg-white/85 px-3 py-1.5 text-xs font-medium text-black shadow-sm backdrop-blur hover:bg-white focus:outline-none focus:ring-2 focus:ring-black/30"
+                    style={{
+                      right: "16px",
+                      bottom: "calc(env(safe-area-inset-bottom, 0px) + 14px)",
+                    }}
+                    aria-label="Try virtually"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 5v4l3 3-1.5 1.5L11 12V7h2z"/>
+                    </svg>
+                    Try Virtually
+                  </Link>
+
+                  {/* dots — lifted to avoid chip overlap */}
                   {gallery.length > 1 && (
-                    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-1.5 rounded-full bg-[var(--card-bg)] px-2 py-1 backdrop-blur-md">
+                    <div
+                      className="absolute left-1/2 -translate-x-1/2 flex items-center gap-1.5 rounded-full bg-[var(--card-bg)] px-2 py-1 backdrop-blur-md"
+                      style={{
+                        bottom: "calc(env(safe-area-inset-bottom, 0px) + 52px)",
+                      }}
+                    >
                       {gallery.map((_, i) => (
                         <button
                           key={i}
@@ -568,7 +597,7 @@ export default function ProductDetails({ data }) {
               </section>
             )}
 
-            {/* CTA block — mobile: buttons side-by-side, icons below */}
+            {/* CTA block */}
             <section>
               <div className="flex flex-col gap-3 mt-2">
                 <div className="flex items-center gap-3">
@@ -604,7 +633,7 @@ export default function ProductDetails({ data }) {
                   </Button>
                 </div>
 
-                {/* Icons row — under buttons on mobile, inline on larger screens */}
+                {/* Icons row */}
                 <div className="flex items-center gap-2 justify-start sm:justify-end">
                   <button className="p-2 rounded-full border border-[var(--divider)] text-[var(--fg)]"><Heart className="h-4 w-4" /></button>
                   <button className="p-2 rounded-full border border-[var(--divider)] text-[var(--fg)]"><Share2 className="h-4 w-4" /></button>
@@ -691,7 +720,7 @@ export default function ProductDetails({ data }) {
         </div>
         <div className="w-full lg:w-1/3 flex justify-center">
           <img
-            src={resolveAsset(p.hero?.image)}
+            src={resolveAsset(p.hero?.image) || heroSrc}
             alt="Product Main"
             className="rounded-2xl w-full max-w-[360px] object-cover shadow-sm"
             loading="lazy"
@@ -704,7 +733,7 @@ export default function ProductDetails({ data }) {
         <h2 className="text-2xl md:text-3xl font-semibold mb-4 text-center text-[var(--fg)]">Watch In Action</h2>
         <VideoHero
           src={videoSrc}
-          poster={resolveAsset(p.hero?.image)}
+          poster={resolveAsset(p.hero?.image) || heroSrc}
           heightClass="h-[52svh] md:h-[60svh] lg:h-[64svh]"
           overlayClass="bg-[radial-gradient(80%_80%_at_0%_100%,rgba(0,0,0,0.55)_0%,transparent_60%)]"
           startMuted
@@ -813,7 +842,7 @@ export default function ProductDetails({ data }) {
                     </span>
                     <h3 className="text-base font-semibold text-[var(--fg)]">{s.name}</h3>
                   </div>
-                  <p className="mt-2 text-sm leading-relaxed text-[var(--fg-muted)]">{s.desc}</p>
+                  <p className="mt-2 text-sm leading-relaxed text:[var(--fg-muted)]">{s.desc}</p>
                 </div>
               ))}
             </div>

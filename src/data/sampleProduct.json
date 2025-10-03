@@ -5,7 +5,6 @@
   "categoryPath": ["Makeup", "Lips", "Lipstick"],
   "longDescription": "A nourishing glaze that hydrates and replenishes. It feels like a thick glaze that glides on smoothly and smells like a fresh strawberry glazed donut. Good for all skin types, this product is Cruelty-Free, Vegan, Gluten-Free, and Dermatologist-Tested. Winner of the 2022 Allure Best of Beauty Award for Best Untinted Lip Balm.",
   "videoUrl": "intro1.mp4",
-
   "hero": {
     "image": "product8.png",
     "objectPosition": "68% 34%",
@@ -13,7 +12,6 @@
     "overlay": "linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.06) 100%)",
     "wheelScrollSwitch": true
   },
-
   "theme": {
     "defaultBg": "radial-gradient(80% 60% at 50% 0%, #faf7f2 0%, #f4efe9 45%, #efe9e2 100%)",
     "bgScenes": {
@@ -33,7 +31,6 @@
       "reviews": "light"
     }
   },
-
   "gallery": ["product1.png", "product8.png", "product3.png", "product4.png"],
   "rating": 4.7,
   "reviews": 328,
@@ -42,7 +39,6 @@
   "currency": "₹",
   "discountText": "31% OFF",
   "badges": ["Vegan", "Cruelty-Free", "Dermat Tested", "Paraben-Free"],
-
   "shades": [
     {
       "key": "rosewood",
@@ -66,7 +62,6 @@
       "desc": "A timeless and versatile classic mauve with cool undertones. This shade is universally flattering and suitable for any occasion, from day to night."
     }
   ],
-
   "benefits": [
     "12-hour comfortable matte finish",
     "Blurs the look of lines & texture",
