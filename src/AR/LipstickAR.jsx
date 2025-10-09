@@ -222,7 +222,7 @@ export default function LipstickAR() {
         </div>
         <div>
           {/* --- ⬇️ 3. LOCKED: The UI controls are now disabled and read from the lockedSettings object --- */}
-          <label className="block text-sm font-medium mb-2">Finish</label>
+{/*           <label className="block text-sm font-medium mb-2">Finish</label>
           <select value={finish} disabled className="w-full px-3 py-2 border rounded text-sm disabled:opacity-70 disabled:cursor-not-allowed">
             <option value="matte">Matte</option><option value="satin">Satin</option><option value="gloss">Gloss</option>
           </select>
@@ -232,10 +232,10 @@ export default function LipstickAR() {
           <label className="block text-sm font-medium mt-4">Mask grow (dilate)</label>
           <input type="range" min="0" max="6" step="0.5" value={maskGrow} disabled className="w-full disabled:opacity-70 disabled:cursor-not-allowed" />
           <div className="text-sm text-gray-600 mt-1">{maskGrow.toFixed(1)} px</div>
-          <label className="block text-sm font-medium mt-4">Inner cut (tighten)</label>
-          <input type="range" min="0" max="0.35" step="0.01" value={innerTite} disabled className="w-full disabled:opacity-70 disabled:cursor-not-allowed" />
-          <div className="text-sm text-gray-600 mt-1">{Math.round(innerTite*100)}% tighter</div>
-        </div>
+          <label className="block text-sm font-medium mt-4">Inner cut (tighten)</label> */}
+{/*           <input type="range" min="0" max="0.35" step="0.01" value={innerTite} disabled className="w-full disabled:opacity-70 disabled:cursor-not-allowed" />
+          <div className="text-sm text-gray-600 mt-1">{Math.round(innerTite*100)}% tighter</div> */}
+{/*         </div>
         <div>
           <label className="block text-sm font-medium mb-2">Stability (smoothing)</label>
           <input type="range" min="0" max="0.95" step="0.05" value={smoothA} disabled className="w-full disabled:opacity-70 disabled:cursor-not-allowed" />
@@ -246,27 +246,27 @@ export default function LipstickAR() {
             <button onClick={()=>setDebug(d=>!d)} className={`px-3 py-2 border rounded text-sm ${debug?"bg-gray-100":""}`}>Debug</button>
           </div>
         </div>
-        <div>
-          <label className="block text-sm font-medium mb-2">Quality</label>
+        <div> */}
+{/*           <label className="block text-sm font-medium mb-2">Quality</label>
           <select value={quality} onChange={(e)=>setQuality(e.target.value)} className="w-full px-3 py-2 border rounded text-sm">
             <option value="saver">Battery Saver (640p)</option><option value="balanced">Balanced (540p)</option>
             <option value="high">High (720p)</option><option value="ultra">Ultra (1080p)</option>
           </select>
-          <label className="block text-sm font-medium mt-4">Facing</label>
-          <div className="flex gap-2">
+          <label className="block text-sm font-medium mt-4">Facing</label> */}
+{/*           <div className="flex gap-2">
             <button onClick={()=>setFacing("user")} className={`px-3 py-2 border rounded text-sm ${facing==="user"?"bg-gray-100":""}`}>Front</button>
             <button onClick={()=>setFacing("environment")} className={`px-3 py-2 border rounded text-sm ${facing==="environment"?"bg-gray-100":""}`}>Back</button>
-          </div>
-          <label className="block text-sm font-medium mt-4">Camera</label>
+          </div> */}
+{/*           <label className="block text-sm font-medium mt-4">Camera</label>
           <select value={deviceId} onChange={(e)=>setDeviceId(e.target.value)} className="w-full px-3 py-2 border rounded text-sm">
             {devices.length===0 && <option value="">Default</option>}
             {devices.map((d,i)=>(<option key={d.deviceId||i} value={d.deviceId}>{d.label||`Camera ${i+1}`}</option>))}
-          </select>
-          <div className="flex flex-wrap gap-2 mt-4">
+          </select> */}
+{/*           <div className="flex flex-wrap gap-2 mt-4">
             {!started ? (<button onClick={start} className="px-3 py-2 border rounded text-sm">Start</button>) : (<button onClick={()=>{ setStarted(false); stopLoop(); stopStream(); }} className="px-3 py-2 border rounded text-sm">Stop</button>)}
             <button onClick={takeShot} className="px-3 py-2 border rounded text-sm">Save Snapshot</button>
-          </div>
-          <p className="text-xs text-gray-500 mt-3">Tip: even lighting helps. We don’t store or send video anywhere.</p>
+          </div> */}
+{/*           <p className="text-xs text-gray-500 mt-3">Tip: even lighting helps. We don’t store or send video anywhere.</p> */}
         </div>
       </div>
     </div>
