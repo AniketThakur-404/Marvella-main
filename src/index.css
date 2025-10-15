@@ -3,6 +3,28 @@
 /* Add Playfair Display for primary/serif */
 @import url("https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400..900&display=swap");
 
+
+/* prevent horizontal scrollbar caused by any element pushing past viewport */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+/* hide horizontal overflow site-wide (keeps footer/nav visible) */
+body {
+  overflow-x: hidden;
+}
+
+/* if you want to hide *all* scrollbars including vertical on the AR page:
+body.ar-no-scroll { overflow: hidden; }
+
+/* debug outline for overflow detection (remove when done) */
+.debug-outline * {
+  outline: 1px solid rgba(255,0,0,0.04);
+}
+
+
+
 :root {
   --background: #ffffff;
   --foreground: #0a0a0a;

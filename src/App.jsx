@@ -17,7 +17,7 @@ const App = () => {
           path="/ar/lipstick"
           element={
             <div className="min-h-screen bg-gray-50 p-6">
-              <h1 className="text-2xl font-semibold mb-4 mt-10">Lipstick AR Test</h1>
+              <h1 className="text-2xl font-semibold mb-4  mt-10">Lipstick AR Test</h1>
               <LipstickAR />
             </div>
           }
