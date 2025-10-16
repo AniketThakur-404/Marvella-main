@@ -4,7 +4,6 @@ import React, { useEffect, useRef, useState } from "react";
 
 // --- EXPANDED: Data for 23 Lipstick Shades with a "None" option ---
 const LIPSTICK_SHADES = [
-  // FIX 2: Changed color to 'transparent' to correctly disable lipstick drawing
   { id: 0, name: "N/A", color: "transparent" },
   // Reds & Pinks
   { id: 1, name: "405 - New Dimension", color: "#8E1A2D" },
@@ -15,7 +14,6 @@ const LIPSTICK_SHADES = [
   { id: 6, name: "501 - Fuchsia Flash", color: "#E52B8A" },
   { id: 7, name: "425 - Merlot Kiss", color: "#722F37" },
   { id: 8, name: "430 - Black Cherry", color: "#5F021F" },
-
   // Nudes & Browns
   { id: 9, name: "301 - Nude Kiss", color: "#C9917D" },
   { id: 10, name: "305 - Soft Petal", color: "#D89B92" },
@@ -23,14 +21,12 @@ const LIPSTICK_SHADES = [
   { id: 12, name: "312 - Rosewood", color: "#A0654E" },
   { id: 13, name: "315 - Dusty Rose", color: "#B4828E" },
   { id: 14, name: "605 - Espresso Shot", color: "#4E342E" },
-
   // Corals & Oranges
   { id: 15, name: "101 - Coral Dream", color: "#E8715E" },
   { id: 16, name: "108 - Peach Tantra", color: "#F5B5A8" },
   { id: 17, name: "118 - Tangerine Tango", color: "#F28500" },
   { id: 18, name: "308 - Peachy Keen", color: "#E6A895" },
   { id: 19, name: "610 - Terracotta Tease", color: "#C46243" },
-
   // Berries & Plums
   { id: 20, name: "205 - Berry Amour", color: "#8B4A3A" },
   { id: 21, name: "210 - Plum Fantasy", color: "#5C2F31" },
@@ -50,12 +46,13 @@ export default function VirtualTryOn() {
   const faceMeshRef = useRef(null);
   const streamRef = useRef(null);
   const animationFrameRef = useRef(null);
+  const latestLandmarksRef = useRef(null);
+  const lastGoodLandmarksRef = useRef(null);
 
   const [scriptLoaded, setScriptLoaded] = useState(false);
   const [started, setStarted] = useState(false);
   const [selectedShade, setSelectedShade] = useState(LIPSTICK_SHADES[0]);
   const [error, setError] = useState("");
-  // FIX 1: Added missing 'snapshot' state
   const [snapshot, setSnapshot] = useState(null);
 
   const selectedColorRef = useRef(selectedShade.color);
@@ -64,27 +61,20 @@ export default function VirtualTryOn() {
     selectedColorRef.current = selectedShade.color;
   }, [selectedShade]);
 
-  // Effect to load the MediaPipe FaceMesh script from CDN
   useEffect(() => {
     const script = document.createElement("script");
     script.src = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
     script.crossOrigin = "anonymous";
-    script.onload = () => {
-      setScriptLoaded(true);
-    };
+    script.onload = () => setScriptLoaded(true);
     document.head.appendChild(script);
 
     return () => {
-      // Clean up the script when the component unmounts
       const scripts = Array.from(document.head.getElementsByTagName("script"));
       const thisScript = scripts.find((s) => s.src === script.src);
-      if (thisScript) {
-        document.head.removeChild(thisScript);
-      }
+      if (thisScript) document.head.removeChild(thisScript);
     };
   }, []);
 
-  // Effect to initialize FaceMesh once the script is loaded
   useEffect(() => {
     if (!scriptLoaded) return;
 
@@ -102,7 +92,6 @@ export default function VirtualTryOn() {
 
     return () => {
       stopCamera();
-      // Ensure facemesh instance exists and has a close method before calling it
       if (faceMeshRef.current && typeof faceMeshRef.current.close === "function") {
         faceMeshRef.current.close();
       }
@@ -152,37 +141,46 @@ export default function VirtualTryOn() {
       setStarted(false);
     }
   };
-
+  
   const startProcessing = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
+    const { width, height } = canvas;
 
     faceMeshRef.current.onResults((results) => {
-      const { width, height } = canvas;
-      ctx.save();
-      ctx.clearRect(0, 0, width, height);
-      ctx.translate(width, 0); // Flip horizontally
-      ctx.scale(-1, 1);
-      ctx.drawImage(video, 0, 0, width, height);
-
+      latestLandmarksRef.current = results;
       if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-        const landmarks = results.multiFaceLandmarks[0];
-        drawLipstick(ctx, landmarks, width, height);
+        lastGoodLandmarksRef.current = results.multiFaceLandmarks[0];
       }
-      ctx.restore();
     });
 
     const processFrame = async () => {
+      if (!videoRef.current) return;
+
       if (video.readyState >= 4) {
         await faceMeshRef.current.send({ image: video });
       }
+
+      ctx.save();
+      ctx.clearRect(0, 0, width, height);
+      ctx.translate(width, 0); 
+      ctx.scale(-1, 1);
+      ctx.drawImage(video, 0, 0, width, height); 
+
+      const landmarksToDraw = latestLandmarksRef.current?.multiFaceLandmarks?.[0] || lastGoodLandmarksRef.current;
+
+      if (landmarksToDraw) {
+        drawLipstick(ctx, landmarksToDraw, width, height);
+      }
+
+      ctx.restore();
       animationFrameRef.current = requestAnimationFrame(processFrame);
     };
+
     processFrame();
   };
-  
-  // FIX 1: Added the missing takeSnapshot function
+
   const takeSnapshot = () => {
     const canvas = canvasRef.current;
     if (canvas) {
@@ -196,9 +194,8 @@ export default function VirtualTryOn() {
   };
 
   const drawLipstick = (ctx, landmarks, w, h) => {
-    if (selectedColorRef.current === "transparent") {
-      return; // Don't draw lipstick if "None" is selected
-    }
+    if (selectedColorRef.current === "transparent") return;
+
     const upperOuterPts = getLipPoints(landmarks, UPPER_LIP_OUTER, w, h);
     const upperInnerPts = getLipPoints(landmarks, UPPER_LIP_INNER, w, h);
     const lowerOuterPts = getLipPoints(landmarks, LOWER_LIP_OUTER, w, h);
@@ -224,23 +221,35 @@ export default function VirtualTryOn() {
 
     ctx.save();
     ctx.fillStyle = selectedColorRef.current;
-    ctx.globalAlpha = 0.85;
+
+    ctx.shadowColor = selectedColorRef.current;
+    ctx.shadowBlur = 15;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    
     ctx.globalCompositeOperation = "multiply";
+    ctx.globalAlpha = 0.7;
+    ctx.fill(lipShape, "evenodd");
+    
+    ctx.shadowBlur = 0;
+
+    ctx.globalCompositeOperation = "overlay";
+    ctx.globalAlpha = 0.4;
     ctx.fill(lipShape, "evenodd");
 
     ctx.globalCompositeOperation = "soft-light";
     ctx.globalAlpha = 0.5;
     ctx.fill(lipShape, "evenodd");
-
+    
     ctx.restore();
   };
 
   return (
-    <div className="w-screen h-screen -ml-10 bg-gray-900 font-sans">
+    // LAYOUT FIX: Use a fixed position overlay to ensure it covers the screen and centers content properly.
+    <div className="fixed inset-0 bg-gray-900 font-sans flex items-center justify-center">
       <div className="relative w-full h-full bg-black flex items-center justify-center">
         <video ref={videoRef} className="hidden" playsInline muted />
         <canvas ref={canvasRef} className="max-w-full max-h-full object-cover rounded-lg" />
-
         {snapshot && (
           <div className="absolute inset-0 bg-black/80 z-30 flex flex-col items-center justify-center p-4">
             <img
@@ -251,95 +260,82 @@ export default function VirtualTryOn() {
             <div className="mt-8 flex gap-4">
               <button
                 onClick={() => setSnapshot(null)}
-                className="px-6 py-2 bg-gray-700 text-white rounded-full font-semibold hover:bg-gray-600 transition-colors"
+                className="px-5 py-2 sm:px-6 bg-gray-700 text-white rounded-full font-semibold hover:bg-gray-600 transition-colors"
               >
                 Back
               </button>
               <a
                 href={snapshot}
                 download="lipstick-try-on.png"
-                className="px-6 py-2 bg-white text-black rounded-full font-semibold hover:bg-gray-200 transition-colors"
+                className="px-5 py-2 sm:px-6 bg-white text-black rounded-full font-semibold hover:bg-gray-200 transition-colors"
               >
                 Download
               </a>
             </div>
           </div>
         )}
-
         {!started && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-20">
+          <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-20 p-4">
             <button
               onClick={startCamera}
-              className="px-8 py-4 bg-white text-black rounded-full font-semibold text-lg transform hover:scale-105 transition-transform"
+              className="px-6 py-3 text-base sm:px-8 sm:py-4 sm:text-lg bg-white text-black rounded-full font-semibold transform hover:scale-105 transition-transform"
             >
               Start Virtual Try-On
             </button>
           </div>
         )}
-
         {error && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/70 p-4 z-20">
-            <div className="bg-red-100 border border-red-400 text-red-700 px-6 py-4 rounded-xl text-center max-w-md">
+            <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 sm:px-6 sm:py-4 rounded-xl text-center w-11/12 max-w-md">
               <strong className="font-bold">Error: </strong>
               <span className="block sm:inline">{error}</span>
             </div>
           </div>
         )}
-
         {started && !snapshot && (
-          <div className="absolute bottom-0 left-0 right-0 p-4 pb-8 sm:p-6 sm:pb-10 lg:p-8 lg:pb-12 bg-black/30 z-10">
-            <div className="max-w-6xl mx-auto flex flex-col items-center gap-6">
-              {/* --- Color Swatches --- */}
-              <div className="flex flex-wrap items-center justify-center gap-3">
+          <div className="absolute bottom-0 left-0 right-0 p-4 sm:p-6 bg-black/30 z-10">
+            <div className="max-w-6xl mx-auto flex flex-col items-center gap-4 md:gap-5">
+              <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
                 {LIPSTICK_SHADES.map((shade) => (
                   <div key={shade.id} className="relative flex flex-col items-center">
                     <button
                       onClick={() => setSelectedShade(shade)}
-                      className={`w-8 h-8 rounded-full transition-transform duration-200 ease-in-out border border-white/30 flex items-center justify-center overflow-hidden
+                      className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full transition-transform duration-200 ease-in-out border border-white/30 flex items-center justify-center overflow-hidden
                         ${selectedShade.id === shade.id ? "scale-110 ring-2 ring-white ring-offset-2 ring-offset-black/50" : "hover:scale-110"}`
                       }
                       style={{ backgroundColor: shade.color === 'transparent' ? '#4a4a4a' : shade.color }}
-                      // FIX 3: Removed stray underscore character
                       title={shade.name}
                     >
-                      {/* IMPROVEMENT 4: Added a visual indicator for the "None" button */}
                       {shade.id === 0 && (
-                         <div className="w-full h-0.5 bg-red-500 transform rotate-45"></div>
+                          <div className="w-full h-0.5 bg-red-500 transform rotate-45"></div>
                       )}
                     </button>
                     <div
-                      className={`absolute -bottom-2.5 h-1 w-1 rounded-full bg-red-500 transition-opacity ${
+                      className={`absolute -bottom-2 h-1 w-1 rounded-full bg-red-500 transition-opacity ${
                         selectedShade.id === shade.id ? "opacity-100" : "opacity-0"
                       }`}
                     ></div>
                   </div>
                 ))}
               </div>
-
-              {/* --- Action Buttons --- */}
-              <div className="w-full max-w-sm flex items-center justify-around text-white">
-                {/* Placeholder Icon 1 */}
-                <button className="p-2 hover:bg-white/10 rounded-full">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>
+              <div className="w-full max-w-md flex items-center justify-around text-white">
+                <button className="p-2 md:p-3 hover:bg-white/10 rounded-full">
+                  <svg className="w-5 h-5 md:w-6 md:h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></svg>
                 </button>
-                {/* Placeholder Icon 2 */}
-                <button className="p-2 hover:bg-white/10 rounded-full">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"></path><path d="M12 18a6 6 0 0 0 0-12v12z"></path></svg>
+                <button className="p-2 md:p-3 hover:bg-white/10 rounded-full">
+                  <svg className="w-5 h-5 md:w-6 md:h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"></path><path d="M12 18a6 6 0 0 0 0-12v12z"></path></svg>
                 </button>
-                {/* Shutter Button */}
                 <button
                   onClick={takeSnapshot}
-                  className="w-20 h-20 rounded-full bg-white p-1.5 shadow-lg active:scale-95 transition-transform"
+                  className="w-16 h-16 md:w-20 md:h-20 rounded-full bg-white p-1.5 shadow-lg active:scale-95 transition-transform"
                 >
                   <div className="w-full h-full rounded-full border-2 border-black"></div>
                 </button>
-                {/* Placeholder Icon 3 */}
-                <button className="p-2 hover:bg-white/10 rounded-full">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path></svg>
+                <button className="p-2 md:p-3 hover:bg-white/10 rounded-full">
+                  <svg className="w-5 h-5 md:w-6 md:h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"></path></svg>
                 </button>
-                {/* Placeholder Icon 4 */}
-                <button className="p-2 hover:bg-white/10 rounded-full">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle><circle cx="5" cy="12" r="1"></circle></svg>
+                <button className="p-2 md:p-3 hover:bg-white/10 rounded-full">
+                  <svg className="w-5 h-5 md:w-6 md:h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="1"></circle><circle cx="19" cy="12" r="1"></circle><circle cx="5" cy="12" r="1"></circle></svg>
                 </button>
               </div>
             </div>
