@@ -1,11 +1,8 @@
 import React, { useEffect, useRef, useState } from "react";
-// The direct import is removed to resolve the build error.
-// We will load the script dynamically from a CDN.
 
-// --- EXPANDED: Data for 23 Lipstick Shades with a "None" option ---
+// --- (No changes to LIPSTICK_SHADES or landmark indices) ---
 const LIPSTICK_SHADES = [
   { id: 0, name: "N/A", color: "transparent" },
-  // Reds & Pinks
   { id: 1, name: "405 - New Dimension", color: "#8E1A2D" },
   { id: 2, name: "410 - Passion Red", color: "#C41E3A" },
   { id: 3, name: "415 - Fiery Kiss", color: "#D93B3B" },
@@ -14,31 +11,29 @@ const LIPSTICK_SHADES = [
   { id: 6, name: "501 - Fuchsia Flash", color: "#E52B8A" },
   { id: 7, name: "425 - Merlot Kiss", color: "#722F37" },
   { id: 8, name: "430 - Black Cherry", color: "#5F021F" },
-  // Nudes & Browns
   { id: 9, name: "301 - Nude Kiss", color: "#C9917D" },
   { id: 10, name: "305 - Soft Petal", color: "#D89B92" },
   { id: 11, name: "310 - Mauve Memoir", color: "#9C6B6B" },
   { id: 12, name: "312 - Rosewood", color: "#A0654E" },
   { id: 13, name: "315 - Dusty Rose", color: "#B4828E" },
   { id: 14, name: "605 - Espresso Shot", color: "#4E342E" },
-  // Corals & Oranges
   { id: 15, name: "101 - Coral Dream", color: "#E8715E" },
   { id: 16, name: "108 - Peach Tantra", color: "#F5B5A8" },
   { id: 17, name: "118 - Tangerine Tango", color: "#F28500" },
   { id: 18, name: "308 - Peachy Keen", color: "#E6A895" },
   { id: 19, name: "610 - Terracotta Tease", color: "#C46243" },
-  // Berries & Plums
   { id: 20, name: "205 - Berry Amour", color: "#8B4A3A" },
   { id: 21, name: "210 - Plum Fantasy", color: "#5C2F31" },
   { id: 22, name: "220 - Royal Orchid", color: "#8A4F7D" },
   { id: 23, name: "225 - Velvet Violet", color: "#5B396B" },
 ];
-
-// --- Precise lip landmark indices for accurate rendering ---
 const UPPER_LIP_OUTER = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291];
 const LOWER_LIP_OUTER = [146, 91, 181, 84, 17, 314, 405, 321, 375, 291];
 const UPPER_LIP_INNER = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308];
 const LOWER_LIP_INNER = [95, 88, 178, 87, 14, 317, 402, 318, 324, 308];
+
+// --- MODIFIED: Increased factor for more responsiveness ---
+const SMOOTHING_FACTOR = 0.65;
 
 export default function VirtualTryOn() {
   const videoRef = useRef(null);
@@ -48,6 +43,7 @@ export default function VirtualTryOn() {
   const animationFrameRef = useRef(null);
   const latestLandmarksRef = useRef(null);
   const lastGoodLandmarksRef = useRef(null);
+  const smoothedLandmarksRef = useRef(null);
 
   const [scriptLoaded, setScriptLoaded] = useState(false);
   const [started, setStarted] = useState(false);
@@ -61,6 +57,7 @@ export default function VirtualTryOn() {
     selectedColorRef.current = selectedShade.color;
   }, [selectedShade]);
 
+  // --- (No changes to useEffect for script loading and FaceMesh setup) ---
   useEffect(() => {
     const script = document.createElement("script");
     script.src = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
@@ -98,6 +95,7 @@ export default function VirtualTryOn() {
     };
   }, [scriptLoaded]);
 
+  // --- (No changes to stopCamera or startCamera) ---
   const stopCamera = () => {
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     if (streamRef.current) {
@@ -141,7 +139,7 @@ export default function VirtualTryOn() {
       setStarted(false);
     }
   };
-  
+
   const startProcessing = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -164,16 +162,41 @@ export default function VirtualTryOn() {
 
       ctx.save();
       ctx.clearRect(0, 0, width, height);
-      ctx.translate(width, 0); 
+      ctx.translate(width, 0);
       ctx.scale(-1, 1);
-      ctx.drawImage(video, 0, 0, width, height); 
+      ctx.drawImage(video, 0, 0, width, height);
 
-      const landmarksToDraw = latestLandmarksRef.current?.multiFaceLandmarks?.[0] || lastGoodLandmarksRef.current;
+      // --- MODIFIED: Added logic to reset smoothing when face is lost/re-found ---
+      const rawLandmarks = latestLandmarksRef.current?.multiFaceLandmarks?.[0];
+
+      if (rawLandmarks) {
+        // If we have raw landmarks but no smoothed ones (i.e., first frame or after losing tracking),
+        // initialize the smoothed landmarks directly to prevent a "sliding" effect.
+        if (!smoothedLandmarksRef.current) {
+          smoothedLandmarksRef.current = JSON.parse(JSON.stringify(rawLandmarks));
+        } else {
+          // Apply Exponential Moving Average (EMA) smoothing
+          for (let i = 0; i < rawLandmarks.length; i++) {
+            const smoothed = smoothedLandmarksRef.current[i];
+            const current = rawLandmarks[i];
+            smoothed.x += (current.x - smoothed.x) * SMOOTHING_FACTOR;
+            smoothed.y += (current.y - smoothed.y) * SMOOTHING_FACTOR;
+            // z-smoothing can be less aggressive if needed
+            smoothed.z += (current.z - smoothed.z) * SMOOTHING_FACTOR * 0.5;
+          }
+        }
+      } else {
+        // If we lose tracking, reset the smoothed landmarks.
+        smoothedLandmarksRef.current = null;
+      }
+
+      // Use smoothed landmarks if available, otherwise fall back to the last good raw landmarks
+      const landmarksToDraw = smoothedLandmarksRef.current || lastGoodLandmarksRef.current;
 
       if (landmarksToDraw) {
         drawLipstick(ctx, landmarksToDraw, width, height);
       }
-
+      
       ctx.restore();
       animationFrameRef.current = requestAnimationFrame(processFrame);
     };
@@ -181,6 +204,7 @@ export default function VirtualTryOn() {
     processFrame();
   };
 
+  // --- (No changes to takeSnapshot, getLipPoints, or drawLipstick) ---
   const takeSnapshot = () => {
     const canvas = canvasRef.current;
     if (canvas) {
@@ -244,9 +268,9 @@ export default function VirtualTryOn() {
     ctx.restore();
   };
 
+  // --- (No changes to the JSX return) ---
   return (
-    // LAYOUT FIX: Use a fixed position overlay to ensure it covers the screen and centers content properly.
-    <div className="fixed inset-0 bg-gray-900 font-sans flex items-center justify-center">
+    <div className="fixed inset-0 bg-gray-900 font-sans flex items-center justify-center ">
       <div className="relative w-full h-full bg-black flex items-center justify-center">
         <video ref={videoRef} className="hidden" playsInline muted />
         <canvas ref={canvasRef} className="max-w-full max-h-full object-cover rounded-lg" />
