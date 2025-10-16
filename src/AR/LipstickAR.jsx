@@ -33,7 +33,17 @@ const UPPER_LIP_INNER = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308];
 const LOWER_LIP_INNER = [95, 88, 178, 87, 14, 317, 402, 318, 324, 308];
 
 // --- MODIFIED: Increased factor for more responsiveness ---
-const SMOOTHING_FACTOR = 0.65;
+const SMOOTHING_FACTOR = 0.72;
+const MIN_LIP_SMOOTHING = 0.4;
+const MAX_LIP_SMOOTHING = 0.92;
+const POSITION_SNAP_THRESHOLD = 0.006;
+
+const LIP_LANDMARK_INDICES = new Set([
+  ...UPPER_LIP_OUTER,
+  ...LOWER_LIP_OUTER,
+  ...UPPER_LIP_INNER,
+  ...LOWER_LIP_INNER,
+]);
 
 export default function VirtualTryOn() {
   const videoRef = useRef(null);
@@ -56,6 +66,15 @@ export default function VirtualTryOn() {
   useEffect(() => {
     selectedColorRef.current = selectedShade.color;
   }, [selectedShade]);
+
+  useEffect(() => {
+    const { style } = document.body;
+    const previousOverflow = style.overflow;
+    style.overflow = "hidden";
+    return () => {
+      style.overflow = previousOverflow;
+    };
+  }, []);
 
   // --- (No changes to useEffect for script loading and FaceMesh setup) ---
   useEffect(() => {
@@ -179,10 +198,20 @@ export default function VirtualTryOn() {
           for (let i = 0; i < rawLandmarks.length; i++) {
             const smoothed = smoothedLandmarksRef.current[i];
             const current = rawLandmarks[i];
-            smoothed.x += (current.x - smoothed.x) * SMOOTHING_FACTOR;
-            smoothed.y += (current.y - smoothed.y) * SMOOTHING_FACTOR;
+            let blendFactor = SMOOTHING_FACTOR;
+            if (LIP_LANDMARK_INDICES.has(i)) {
+              const deltaX = current.x - smoothed.x;
+              const deltaY = current.y - smoothed.y;
+              const planarDelta = Math.hypot(deltaX, deltaY);
+              const ratio = Math.min(1, planarDelta / POSITION_SNAP_THRESHOLD);
+              blendFactor =
+                MIN_LIP_SMOOTHING +
+                (MAX_LIP_SMOOTHING - MIN_LIP_SMOOTHING) * ratio;
+            }
+            smoothed.x += (current.x - smoothed.x) * blendFactor;
+            smoothed.y += (current.y - smoothed.y) * blendFactor;
             // z-smoothing can be less aggressive if needed
-            smoothed.z += (current.z - smoothed.z) * SMOOTHING_FACTOR * 0.5;
+            smoothed.z += (current.z - smoothed.z) * blendFactor * 0.5;
           }
         }
       } else {
