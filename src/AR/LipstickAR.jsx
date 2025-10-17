@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 
-// --- (No changes to LIPSTICK_SHADES or landmark indices) ---
+// --- (No changes to landmark indices) ---
 const LIPSTICK_SHADES = [
   { id: 0, name: "N/A", color: "transparent" },
   { id: 1, name: "Scarlet Siren", color: "#B82229" },
@@ -22,11 +22,14 @@ const LIPSTICK_SHADES = [
   { id: 17, name: "Rose Fantasy", color: "#C25D6A" },
   { id: 18, name: "Mauve Memoir", color: "#A86267" },
   { id: 19, name: "Rouge Mistral", color: "#94373F" },
-  { id: 20, name: "Flushed Fig", color: "#A3243D" },
+  // Ensure Flushed Fig uses your exact hex:
+  { id: 20, name: "Flushed Fig", color: "#9A4140" },
   { id: 21, name: "Terracotta Dream", color: "#C5552F" },
-  { id: 22, name: "Nude Myth", color: "#D79B7A" },
+  // Ensure Nude Myth uses your exact hex:
+  { id: 22, name: "Nude Myth", color: "#AF705A" },
   { id: 23, name: "Runway Rani", color: "#D13864" },
 ];
+
 const UPPER_LIP_OUTER = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291];
 const LOWER_LIP_OUTER = [146, 91, 181, 84, 17, 314, 405, 321, 375, 291];
 const UPPER_LIP_INNER = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308];
@@ -37,6 +40,8 @@ const SMOOTHING_FACTOR = 0.72;
 const MIN_LIP_SMOOTHING = 0.4;
 const MAX_LIP_SMOOTHING = 0.92;
 const POSITION_SNAP_THRESHOLD = 0.006;
+const MAX_LANDMARK_AGE_MS = 160;
+const MIN_LIP_AREA_RATIO = 0.00006;
 
 const LIP_LANDMARK_INDICES = new Set([
   ...UPPER_LIP_OUTER,
@@ -54,6 +59,7 @@ export default function VirtualTryOn() {
   const latestLandmarksRef = useRef(null);
   const lastGoodLandmarksRef = useRef(null);
   const smoothedLandmarksRef = useRef(null);
+  const lastLandmarkTimestampRef = useRef(0);
 
   const [scriptLoaded, setScriptLoaded] = useState(false);
   const [started, setStarted] = useState(false);
@@ -168,7 +174,12 @@ export default function VirtualTryOn() {
     faceMeshRef.current.onResults((results) => {
       latestLandmarksRef.current = results;
       if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-        lastGoodLandmarksRef.current = results.multiFaceLandmarks[0];
+        const now =
+          typeof performance !== "undefined" ? performance.now() : Date.now();
+        lastLandmarkTimestampRef.current = now;
+        lastGoodLandmarksRef.current = results.multiFaceLandmarks[0].map(
+          ({ x, y, z }) => ({ x, y, z })
+        );
       }
     });
 
@@ -178,6 +189,9 @@ export default function VirtualTryOn() {
       if (video.readyState >= 4) {
         await faceMeshRef.current.send({ image: video });
       }
+
+      const now =
+        typeof performance !== "undefined" ? performance.now() : Date.now();
 
       ctx.save();
       ctx.clearRect(0, 0, width, height);
@@ -189,6 +203,7 @@ export default function VirtualTryOn() {
       const rawLandmarks = latestLandmarksRef.current?.multiFaceLandmarks?.[0];
 
       if (rawLandmarks) {
+        lastLandmarkTimestampRef.current = now;
         // If we have raw landmarks but no smoothed ones (i.e., first frame or after losing tracking),
         // initialize the smoothed landmarks directly to prevent a "sliding" effect.
         if (!smoothedLandmarksRef.current) {
@@ -214,18 +229,22 @@ export default function VirtualTryOn() {
             smoothed.z += (current.z - smoothed.z) * blendFactor * 0.5;
           }
         }
-      } else {
-        // If we lose tracking, reset the smoothed landmarks.
+      } else if (now - lastLandmarkTimestampRef.current > MAX_LANDMARK_AGE_MS) {
+        // If we lose tracking long enough, reset cached landmarks so nothing stays on screen.
         smoothedLandmarksRef.current = null;
+        lastGoodLandmarksRef.current = null;
       }
 
-      // Use smoothed landmarks if available, otherwise fall back to the last good raw landmarks
-      const landmarksToDraw = smoothedLandmarksRef.current || lastGoodLandmarksRef.current;
+      const isFresh =
+        now - lastLandmarkTimestampRef.current <= MAX_LANDMARK_AGE_MS;
+      const landmarksToDraw = isFresh
+        ? smoothedLandmarksRef.current || lastGoodLandmarksRef.current
+        : null;
 
       if (landmarksToDraw) {
         drawLipstick(ctx, landmarksToDraw, width, height);
       }
-      
+
       ctx.restore();
       animationFrameRef.current = requestAnimationFrame(processFrame);
     };
@@ -233,7 +252,7 @@ export default function VirtualTryOn() {
     processFrame();
   };
 
-  // --- (No changes to takeSnapshot, getLipPoints, or drawLipstick) ---
+  // --- (No changes to takeSnapshot, getLipPoints, or calculatePolygonArea) ---
   const takeSnapshot = () => {
     const canvas = canvasRef.current;
     if (canvas) {
@@ -246,6 +265,17 @@ export default function VirtualTryOn() {
     return indices.map((i) => ({ x: landmarks[i].x * w, y: landmarks[i].y * h }));
   };
 
+  const calculatePolygonArea = (points) => {
+    if (!points || points.length < 3) return 0;
+    let area = 0;
+    for (let i = 0; i < points.length; i++) {
+      const current = points[i];
+      const next = points[(i + 1) % points.length];
+      area += current.x * next.y - next.x * current.y;
+    }
+    return Math.abs(area) / 2;
+  };
+
   const drawLipstick = (ctx, landmarks, w, h) => {
     if (selectedColorRef.current === "transparent") return;
 
@@ -253,6 +283,16 @@ export default function VirtualTryOn() {
     const upperInnerPts = getLipPoints(landmarks, UPPER_LIP_INNER, w, h);
     const lowerOuterPts = getLipPoints(landmarks, LOWER_LIP_OUTER, w, h);
     const lowerInnerPts = getLipPoints(landmarks, LOWER_LIP_INNER, w, h);
+
+    const lipOutline = [
+      ...upperOuterPts,
+      ...lowerOuterPts.slice().reverse(),
+    ];
+    const lipArea = calculatePolygonArea(lipOutline);
+    const areaRatio = lipArea / (w * h || 1);
+    if (!Number.isFinite(areaRatio) || areaRatio < MIN_LIP_AREA_RATIO) {
+      return;
+    }
 
     const lipShape = new Path2D();
     lipShape.moveTo(upperOuterPts[0].x, upperOuterPts[0].y);
@@ -272,6 +312,37 @@ export default function VirtualTryOn() {
 
     lipShape.addPath(mouthOpening);
 
+    // --- Accurate-color branch ONLY for Flushed Fig (#9A4140) and Nude Myth (#AF705A) ---
+    const hex = (selectedColorRef.current || "").toLowerCase();
+    const isFlushedFig = hex === "#9a4140";
+    const isNudeMyth  = hex === "#af705a";
+    if (isFlushedFig || isNudeMyth) {
+      ctx.save();
+
+      // Soft edge to avoid sticker look
+      ctx.shadowColor = selectedColorRef.current;
+      ctx.shadowBlur = 12;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+
+      // Impose exact hue & saturation, keep lips' luminance for true-to-hex result
+      ctx.globalCompositeOperation = "color";
+      ctx.globalAlpha = 1.0;
+      ctx.fillStyle = selectedColorRef.current;
+      ctx.fill(lipShape, "evenodd");
+
+      // Gentle shaping for realism without shifting the shade perceptibly
+      ctx.shadowBlur = 0;
+      ctx.globalCompositeOperation = "soft-light";
+      ctx.globalAlpha = isFlushedFig ? 0.22 : 0.18;
+      ctx.fill(lipShape, "evenodd");
+
+      ctx.restore();
+      return; // Skip default stack for these two shades
+    }
+    // --- End accurate-color branch ---
+
+    // Default rendering for all other shades (unchanged)
     ctx.save();
     ctx.fillStyle = selectedColorRef.current;
 
@@ -279,11 +350,11 @@ export default function VirtualTryOn() {
     ctx.shadowBlur = 15;
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 0;
-    
+
     ctx.globalCompositeOperation = "multiply";
     ctx.globalAlpha = 0.7;
     ctx.fill(lipShape, "evenodd");
-    
+
     ctx.shadowBlur = 0;
 
     ctx.globalCompositeOperation = "overlay";
@@ -293,7 +364,7 @@ export default function VirtualTryOn() {
     ctx.globalCompositeOperation = "soft-light";
     ctx.globalAlpha = 0.5;
     ctx.fill(lipShape, "evenodd");
-    
+
     ctx.restore();
   };
 
