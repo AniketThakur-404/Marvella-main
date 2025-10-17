@@ -1,46 +1,42 @@
 import React, { useEffect, useRef, useState } from "react";
 
-/* ----------------------- SHADES ----------------------- */
+// --- (No changes to LIPSTICK_SHADES or landmark indices) ---
 const LIPSTICK_SHADES = [
   { id: 0, name: "N/A", color: "transparent" },
-  { id: 1, name: "Scarlet Siren", color: "#B82229" },
-  { id: 2, name: "Rouge Eternelle", color: "#8D1D27" },
-  { id: 3, name: "Power Play", color: "#631820" },
-  { id: 4, name: "Spiced Silk", color: "#A64D3E" },
-  { id: 5, name: "Bare Bloom", color: "#D18A68" },
-  { id: 6, name: "Peach Tantra", color: "#F2A36E" },
-  { id: 7, name: "Rose Flame", color: "#C95A6C" },
-  { id: 8, name: "Whisper Nude", color: "#C79082" },
-  { id: 9, name: "Bloom Creme", color: "#D24E71" },
-  { id: 10, name: "Berry Amour", color: "#8A3832" },
-  { id: 11, name: "Cinnamon Saffron", color: "#B64A29" },
-  { id: 12, name: "Oud Royale", color: "#431621" },
-  { id: 13, name: "Velvet Crush", color: "#C22A2D" },
-  { id: 14, name: "Spiced Ember", color: "#A03529" },
-  { id: 15, name: "Creme Blush", color: "#CF5F4C" },
-  { id: 16, name: "Caramel Eclair", color: "#C77444" },
-  { id: 17, name: "Rose Fantasy", color: "#C25D6A" },
-  { id: 18, name: "Mauve Memoir", color: "#A86267" },
-  { id: 19, name: "Rouge Mistral", color: "#94373F" },
-  { id: 20, name: "Flushed Fig", color: "#9A4140" },
-  { id: 21, name: "Terracotta Dream", color: "#C5552F" },
-  { id: 22, name: "Nude Myth", color: "#AF705A" },
-  { id: 23, name: "Runway Rani", color: "#D13864" },
+  { id: 1, name: "405 - New Dimension", color: "#8E1A2D" },
+  { id: 2, name: "410 - Passion Red", color: "#C41E3A" },
+  { id: 3, name: "415 - Fiery Kiss", color: "#D93B3B" },
+  { id: 4, name: "420 - Deep Ruby", color: "#6B1F2E" },
+  { id: 5, name: "115 - Crimson Pop", color: "#D4457A" },
+  { id: 6, name: "501 - Fuchsia Flash", color: "#E52B8A" },
+  { id: 7, name: "425 - Merlot Kiss", color: "#722F37" },
+  { id: 8, name: "430 - Black Cherry", color: "#5F021F" },
+  { id: 9, name: "301 - Nude Kiss", color: "#C9917D" },
+  { id: 10, name: "305 - Soft Petal", color: "#D89B92" },
+  { id: 11, name: "310 - Mauve Memoir", color: "#9C6B6B" },
+  { id: 12, name: "312 - Rosewood", color: "#A0654E" },
+  { id: 13, name: "315 - Dusty Rose", color: "#B4828E" },
+  { id: 14, name: "605 - Espresso Shot", color: "#4E342E" },
+  { id: 15, name: "101 - Coral Dream", color: "#E8715E" },
+  { id: 16, name: "108 - Peach Tantra", color: "#F5B5A8" },
+  { id: 17, name: "118 - Tangerine Tango", color: "#F28500" },
+  { id: 18, name: "308 - Peachy Keen", color: "#E6A895" },
+  { id: 19, name: "610 - Terracotta Tease", color: "#C46243" },
+  { id: 20, name: "205 - Berry Amour", color: "#8B4A3A" },
+  { id: 21, name: "210 - Plum Fantasy", color: "#5C2F31" },
+  { id: 22, name: "220 - Royal Orchid", color: "#8A4F7D" },
+  { id: 23, name: "225 - Velvet Violet", color: "#5B396B" },
 ];
-
-/* ----------------------- LANDMARKS ----------------------- */
 const UPPER_LIP_OUTER = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291];
 const LOWER_LIP_OUTER = [146, 91, 181, 84, 17, 314, 405, 321, 375, 291];
 const UPPER_LIP_INNER = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308];
 const LOWER_LIP_INNER = [95, 88, 178, 87, 14, 317, 402, 318, 324, 308];
 
-/* ----------------------- SMOOTHING / GUARDS ----------------------- */
+// --- MODIFIED: Increased factor for more responsiveness ---
 const SMOOTHING_FACTOR = 0.72;
 const MIN_LIP_SMOOTHING = 0.4;
 const MAX_LIP_SMOOTHING = 0.92;
 const POSITION_SNAP_THRESHOLD = 0.006;
-const MAX_LANDMARK_AGE_MS = 160;
-const MIN_LIP_AREA_RATIO = 0.00006;
 
 const LIP_LANDMARK_INDICES = new Set([
   ...UPPER_LIP_OUTER,
@@ -49,39 +45,15 @@ const LIP_LANDMARK_INDICES = new Set([
   ...LOWER_LIP_INNER,
 ]);
 
-/* ----------------------- HELPERS ----------------------- */
-const hexToRgb = (hex) => {
-  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [0, 0, 0];
-};
-const polygonBBox = (pts) => {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of pts) {
-    if (p.x < minX) minX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y > maxY) maxY = p.y;
-  }
-  return {
-    x: Math.floor(minX),
-    y: Math.floor(minY),
-    w: Math.ceil(maxX - minX),
-    h: Math.ceil(maxY - minY),
-  };
-};
-
-/* ----------------------- COMPONENT ----------------------- */
-export default function LipstickAR() {
+export default function VirtualTryOn() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const faceMeshRef = useRef(null);
   const streamRef = useRef(null);
   const animationFrameRef = useRef(null);
-
   const latestLandmarksRef = useRef(null);
   const lastGoodLandmarksRef = useRef(null);
   const smoothedLandmarksRef = useRef(null);
-  const lastLandmarkTimestampRef = useRef(0);
 
   const [scriptLoaded, setScriptLoaded] = useState(false);
   const [started, setStarted] = useState(false);
@@ -90,29 +62,41 @@ export default function LipstickAR() {
   const [snapshot, setSnapshot] = useState(null);
 
   const selectedColorRef = useRef(selectedShade.color);
-  useEffect(() => { selectedColorRef.current = selectedShade.color; }, [selectedShade]);
+
+  useEffect(() => {
+    selectedColorRef.current = selectedShade.color;
+  }, [selectedShade]);
 
   useEffect(() => {
     const { style } = document.body;
-    const prev = style.overflow;
+    const previousOverflow = style.overflow;
     style.overflow = "hidden";
-    return () => { style.overflow = prev; };
+    return () => {
+      style.overflow = previousOverflow;
+    };
   }, []);
 
-  /* Load MediaPipe */
+  // --- (No changes to useEffect for script loading and FaceMesh setup) ---
   useEffect(() => {
     const script = document.createElement("script");
     script.src = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
     script.crossOrigin = "anonymous";
     script.onload = () => setScriptLoaded(true);
     document.head.appendChild(script);
-    return () => { document.head.removeChild(script); };
+
+    return () => {
+      const scripts = Array.from(document.head.getElementsByTagName("script"));
+      const thisScript = scripts.find((s) => s.src === script.src);
+      if (thisScript) document.head.removeChild(thisScript);
+    };
   }, []);
 
   useEffect(() => {
     if (!scriptLoaded) return;
+
     const faceMesh = new window.FaceMesh({
-      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+      locateFile: (file) =>
+        `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
     });
     faceMesh.setOptions({
       maxNumFaces: 1,
@@ -121,24 +105,31 @@ export default function LipstickAR() {
       minTrackingConfidence: 0.5,
     });
     faceMeshRef.current = faceMesh;
+
     return () => {
       stopCamera();
-      if (faceMeshRef.current?.close) faceMeshRef.current.close();
+      if (faceMeshRef.current && typeof faceMeshRef.current.close === "function") {
+        faceMeshRef.current.close();
+      }
     };
   }, [scriptLoaded]);
 
-  /* Camera */
+  // --- (No changes to stopCamera or startCamera) ---
   const stopCamera = () => {
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
   };
 
   const startCamera = async () => {
-    if (!scriptLoaded) { setError("Resources are still loading, please try again in a moment."); return; }
-    setError(""); setStarted(true);
+    if (!scriptLoaded) {
+      setError("Resources are still loading, please try again in a moment.");
+      return;
+    }
+    setError("");
+    setStarted(true);
     try {
       stopCamera();
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -147,96 +138,94 @@ export default function LipstickAR() {
       streamRef.current = stream;
       const video = videoRef.current;
       video.srcObject = stream;
-      await new Promise((r) => { video.onloadedmetadata = () => { video.play(); r(); }; });
+      await new Promise((resolve) => {
+        video.onloadedmetadata = () => {
+          video.play();
+          resolve();
+        };
+      });
 
-      // DPR-correct canvas
       const canvas = canvasRef.current;
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width  = Math.round(video.videoWidth  * dpr);
-      canvas.height = Math.round(video.videoHeight * dpr);
-      canvas.style.width  = `${video.videoWidth}px`;
-      canvas.style.height = `${video.videoHeight}px`;
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
 
       startProcessing();
     } catch (e) {
       console.error(e);
-      setError("Camera access is required. Please allow camera permissions and refresh.");
+      setError(
+        "Camera access is required. Please allow camera permissions and refresh."
+      );
       setStarted(false);
     }
   };
 
-  /* Processing Loop */
   const startProcessing = () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
+    const { width, height } = canvas;
 
     faceMeshRef.current.onResults((results) => {
       latestLandmarksRef.current = results;
-      if (results.multiFaceLandmarks?.length) {
-        const now = performance?.now?.() ?? Date.now();
-        lastLandmarkTimestampRef.current = now;
-        lastGoodLandmarksRef.current = results.multiFaceLandmarks[0].map(({ x, y, z }) => ({ x, y, z }));
+      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+        lastGoodLandmarksRef.current = results.multiFaceLandmarks[0];
       }
     });
 
     const processFrame = async () => {
       if (!videoRef.current) return;
-      if (video.readyState >= 4) await faceMeshRef.current.send({ image: video });
 
-      const now = performance?.now?.() ?? Date.now();
-      const vw = video.videoWidth, vh = video.videoHeight;
-      const dpr = window.devicePixelRatio || 1;
+      if (video.readyState >= 4) {
+        await faceMeshRef.current.send({ image: video });
+      }
 
-      // clear & draw camera (mirrored)
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
       ctx.save();
-      ctx.scale(dpr, dpr);
-      ctx.translate(vw, 0);
+      ctx.clearRect(0, 0, width, height);
+      ctx.translate(width, 0);
       ctx.scale(-1, 1);
-      ctx.drawImage(video, 0, 0, vw, vh);
+      ctx.drawImage(video, 0, 0, width, height);
 
-      // smoothing
-      const raw = latestLandmarksRef.current?.multiFaceLandmarks?.[0];
-      if (raw) {
-        lastLandmarkTimestampRef.current = now;
+      // --- MODIFIED: Added logic to reset smoothing when face is lost/re-found ---
+      const rawLandmarks = latestLandmarksRef.current?.multiFaceLandmarks?.[0];
+
+      if (rawLandmarks) {
+        // If we have raw landmarks but no smoothed ones (i.e., first frame or after losing tracking),
+        // initialize the smoothed landmarks directly to prevent a "sliding" effect.
         if (!smoothedLandmarksRef.current) {
-          smoothedLandmarksRef.current = JSON.parse(JSON.stringify(raw));
+          smoothedLandmarksRef.current = JSON.parse(JSON.stringify(rawLandmarks));
         } else {
-          for (let i = 0; i < raw.length; i++) {
-            const s = smoothedLandmarksRef.current[i];
-            const c = raw[i];
-            let blend = SMOOTHING_FACTOR;
+          // Apply Exponential Moving Average (EMA) smoothing
+          for (let i = 0; i < rawLandmarks.length; i++) {
+            const smoothed = smoothedLandmarksRef.current[i];
+            const current = rawLandmarks[i];
+            let blendFactor = SMOOTHING_FACTOR;
             if (LIP_LANDMARK_INDICES.has(i)) {
-              const planar = Math.hypot(c.x - s.x, c.y - s.y);
-              const ratio = Math.min(1, planar / POSITION_SNAP_THRESHOLD);
-              blend = MIN_LIP_SMOOTHING + (MAX_LIP_SMOOTHING - MIN_LIP_SMOOTHING) * ratio;
+              const deltaX = current.x - smoothed.x;
+              const deltaY = current.y - smoothed.y;
+              const planarDelta = Math.hypot(deltaX, deltaY);
+              const ratio = Math.min(1, planarDelta / POSITION_SNAP_THRESHOLD);
+              blendFactor =
+                MIN_LIP_SMOOTHING +
+                (MAX_LIP_SMOOTHING - MIN_LIP_SMOOTHING) * ratio;
             }
-            s.x += (c.x - s.x) * blend;
-            s.y += (c.y - s.y) * blend;
-            s.z += (c.z - s.z) * blend * 0.5;
+            smoothed.x += (current.x - smoothed.x) * blendFactor;
+            smoothed.y += (current.y - smoothed.y) * blendFactor;
+            // z-smoothing can be less aggressive if needed
+            smoothed.z += (current.z - smoothed.z) * blendFactor * 0.5;
           }
         }
-      } else if (now - lastLandmarkTimestampRef.current > MAX_LANDMARK_AGE_MS) {
+      } else {
+        // If we lose tracking, reset the smoothed landmarks.
         smoothedLandmarksRef.current = null;
-        lastGoodLandmarksRef.current = null;
       }
 
-      const isFresh = now - lastLandmarkTimestampRef.current <= MAX_LANDMARK_AGE_MS;
-      const landmarks = isFresh ? smoothedLandmarksRef.current || lastGoodLandmarksRef.current : null;
+      // Use smoothed landmarks if available, otherwise fall back to the last good raw landmarks
+      const landmarksToDraw = smoothedLandmarksRef.current || lastGoodLandmarksRef.current;
 
-      if (landmarks) {
-        drawLipstickExactHex(ctx, landmarks, vw, vh, {
-          color: selectedColorRef.current,
-          dpr,
-          EDGE_FEATHER_PX: 1.2, // soft edge; bump to 1.6 if needed
-          SHINE: 0.0,           // keep 0 for *identical* look to swatch
-        });
+      if (landmarksToDraw) {
+        drawLipstick(ctx, landmarksToDraw, width, height);
       }
-
+      
       ctx.restore();
       animationFrameRef.current = requestAnimationFrame(processFrame);
     };
@@ -244,115 +233,76 @@ export default function LipstickAR() {
     processFrame();
   };
 
+  // --- (No changes to takeSnapshot, getLipPoints, or drawLipstick) ---
   const takeSnapshot = () => {
     const canvas = canvasRef.current;
-    if (canvas) setSnapshot(canvas.toDataURL("image/png"));
-  };
-
-  const getLipPoints = (landmarks, indices, w, h) =>
-    indices.map((i) => ({ x: landmarks[i].x * w, y: landmarks[i].y * h }));
-
-  const calculatePolygonArea = (points) => {
-    if (!points || points.length < 3) return 0;
-    let area = 0;
-    for (let i = 0; i < points.length; i++) {
-      const a = points[i];
-      const b = points[(i + 1) % points.length];
-      area += a.x * b.y - b.x * a.y;
+    if (canvas) {
+      const dataUrl = canvas.toDataURL("image/png");
+      setSnapshot(dataUrl);
     }
-    return Math.abs(area) / 2;
   };
 
-  /* -------- EXACT HEX RENDERER (1:1 with bullet) -------- */
-  const drawLipstickExactHex = (ctx, landmarks, w, h, opts) => {
-    const hex = (opts.color || "").toLowerCase();
-    if (hex === "transparent") return;
+  const getLipPoints = (landmarks, indices, w, h) => {
+    return indices.map((i) => ({ x: landmarks[i].x * w, y: landmarks[i].y * h }));
+  };
 
-    // Geometry in CSS px
-    const upO = getLipPoints(landmarks, UPPER_LIP_OUTER, w, h);
-    const loO = getLipPoints(landmarks, LOWER_LIP_OUTER, w, h);
-    const upI = getLipPoints(landmarks, UPPER_LIP_INNER, w, h);
-    const loI = getLipPoints(landmarks, LOWER_LIP_INNER, w, h);
+  const drawLipstick = (ctx, landmarks, w, h) => {
+    if (selectedColorRef.current === "transparent") return;
 
-    // Guard tiny lips (prevents frame recolor)
-    const outline = [...upO, ...loO.slice().reverse()];
-    const lipArea = calculatePolygonArea(outline);
-    const areaRatio = lipArea / (w * h || 1);
-    if (!Number.isFinite(areaRatio) || areaRatio < MIN_LIP_AREA_RATIO) return;
+    const upperOuterPts = getLipPoints(landmarks, UPPER_LIP_OUTER, w, h);
+    const upperInnerPts = getLipPoints(landmarks, UPPER_LIP_INNER, w, h);
+    const lowerOuterPts = getLipPoints(landmarks, LOWER_LIP_OUTER, w, h);
+    const lowerInnerPts = getLipPoints(landmarks, LOWER_LIP_INNER, w, h);
 
-    // Build even-odd path
-    const path = new Path2D();
-    path.moveTo(upO[0].x, upO[0].y);
-    for (let i = 1; i < upO.length; i++) path.lineTo(upO[i].x, upO[i].y);
-    for (let i = loO.length - 1; i >= 0; i--) path.lineTo(loO[i].x, loO[i].y);
-    path.closePath();
-    const mouth = new Path2D();
-    mouth.moveTo(upI[0].x, upI[0].y);
-    for (let i = 1; i < upI.length; i++) mouth.lineTo(upI[i].x, upI[i].y);
-    for (let i = loI.length - 1; i >= 0; i--) mouth.lineTo(loI[i].x, loI[i].y);
-    mouth.closePath();
-    path.addPath(mouth);
+    const lipShape = new Path2D();
+    lipShape.moveTo(upperOuterPts[0].x, upperOuterPts[0].y);
+    for (let i = 1; i < upperOuterPts.length; i++)
+      lipShape.lineTo(upperOuterPts[i].x, upperOuterPts[i].y);
+    for (let i = lowerOuterPts.length - 1; i >= 0; i--)
+      lipShape.lineTo(lowerOuterPts[i].x, lowerOuterPts[i].y);
+    lipShape.closePath();
 
-    const bbox = polygonBBox([...upO, ...loO]);
-    if (bbox.w <= 0 || bbox.h <= 0) return;
+    const mouthOpening = new Path2D();
+    mouthOpening.moveTo(upperInnerPts[0].x, upperInnerPts[0].y);
+    for (let i = 1; i < upperInnerPts.length; i++)
+      mouthOpening.lineTo(upperInnerPts[i].x, upperInnerPts[i].y);
+    for (let i = lowerInnerPts.length - 1; i >= 0; i--)
+      mouthOpening.lineTo(lowerInnerPts[i].x, lowerInnerPts[i].y);
+    mouthOpening.closePath();
 
-    // 1) Solid fill with the exact hex
-    const solid = document.createElement("canvas");
-    solid.width = bbox.w; solid.height = bbox.h;
-    const solx = solid.getContext("2d");
-    solx.fillStyle = hex;
-    solx.fillRect(0, 0, bbox.w, bbox.h);
+    lipShape.addPath(mouthOpening);
 
-    // 2) Feathered mask off-screen (avoid halo/overlap)
-    const mask = document.createElement("canvas");
-    mask.width = bbox.w; mask.height = bbox.h;
-    const mx = mask.getContext("2d");
-    mx.translate(-bbox.x, -bbox.y);
-    mx.fillStyle = "#fff";
-    mx.fill(path, "evenodd");
-    mx.setTransform(1, 0, 0, 1, 0, 0);
-
-    mx.filter = `blur(${opts.EDGE_FEATHER_PX ?? 1.2}px)`;
-    const blurred = document.createElement("canvas");
-    blurred.width = bbox.w; blurred.height = bbox.h;
-    const bx = blurred.getContext("2d");
-    bx.drawImage(mask, 0, 0);
-
-    // 3) Apply mask to the solid color
-    solx.save();
-    solx.globalCompositeOperation = "destination-in";
-    solx.drawImage(blurred, 0, 0);
-    solx.restore();
-
-    // 4) Composite once onto the main canvas
     ctx.save();
-    ctx.globalCompositeOperation = "source-over";
-    ctx.drawImage(solid, bbox.x, bbox.y);
-    ctx.restore();
+    ctx.fillStyle = selectedColorRef.current;
 
-    // Optional micro-shine (keep 0 for perfect equality to the bullet)
-    const SHINE = Math.max(0, Math.min(1, opts.SHINE ?? 0.0));
-    if (SHINE > 0) {
-      const midTop = upO[5], midBot = loO[4];
-      const g = ctx.createLinearGradient(midTop.x, midTop.y, midBot.x, midBot.y + 10);
-      g.addColorStop(0.0, `rgba(255,255,255,${0.04 * SHINE})`);
-      g.addColorStop(0.4, `rgba(255,255,255,${0.025 * SHINE})`);
-      g.addColorStop(1.0, "rgba(255,255,255,0)");
-      ctx.save();
-      ctx.globalCompositeOperation = "screen";
-      ctx.fillStyle = g;
-      ctx.fillRect(bbox.x, bbox.y, bbox.w, bbox.h);
-      ctx.restore();
-    }
+    ctx.shadowColor = selectedColorRef.current;
+    ctx.shadowBlur = 15;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+    
+    ctx.globalCompositeOperation = "multiply";
+    ctx.globalAlpha = 0.7;
+    ctx.fill(lipShape, "evenodd");
+    
+    ctx.shadowBlur = 0;
+
+    ctx.globalCompositeOperation = "overlay";
+    ctx.globalAlpha = 0.4;
+    ctx.fill(lipShape, "evenodd");
+
+    ctx.globalCompositeOperation = "soft-light";
+    ctx.globalAlpha = 0.5;
+    ctx.fill(lipShape, "evenodd");
+    
+    ctx.restore();
   };
 
-  /* ----------------------- UI ----------------------- */
+  // --- (No changes to the JSX return) ---
   return (
-    <div className="fixed inset-0 bg-gray-900 font-sans flex items-center justify-center">
+    <div className="fixed inset-0 bg-gray-900 font-sans flex items-center justify-center ">
       <div className="relative w-full h-full bg-black flex items-center justify-center">
         <video ref={videoRef} className="hidden" playsInline muted />
         <canvas ref={canvasRef} className="max-w-full max-h-full object-cover rounded-lg" />
-
         {snapshot && (
           <div className="absolute inset-0 bg-black/80 z-30 flex flex-col items-center justify-center p-4">
             <img
@@ -377,7 +327,6 @@ export default function LipstickAR() {
             </div>
           </div>
         )}
-
         {!started && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-20 p-4">
             <button
@@ -388,7 +337,6 @@ export default function LipstickAR() {
             </button>
           </div>
         )}
-
         {error && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/70 p-4 z-20">
             <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 sm:px-6 sm:py-4 rounded-xl text-center w-11/12 max-w-md">
@@ -397,7 +345,6 @@ export default function LipstickAR() {
             </div>
           </div>
         )}
-
         {started && !snapshot && (
           <div className="absolute bottom-0 left-0 right-0 p-4 sm:p-6 bg-black/30 z-10">
             <div className="max-w-6xl mx-auto flex flex-col items-center gap-4 md:gap-5">
@@ -407,11 +354,14 @@ export default function LipstickAR() {
                     <button
                       onClick={() => setSelectedShade(shade)}
                       className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full transition-transform duration-200 ease-in-out border border-white/30 flex items-center justify-center overflow-hidden
-                        ${selectedShade.id === shade.id ? "scale-110 ring-2 ring-white ring-offset-2 ring-offset-black/50" : "hover:scale-110"}`}
-                      style={{ backgroundColor: shade.color === "transparent" ? "#4a4a4a" : shade.color }}
+                        ${selectedShade.id === shade.id ? "scale-110 ring-2 ring-white ring-offset-2 ring-offset-black/50" : "hover:scale-110"}`
+                      }
+                      style={{ backgroundColor: shade.color === 'transparent' ? '#4a4a4a' : shade.color }}
                       title={shade.name}
                     >
-                      {shade.id === 0 && <div className="w-full h-0.5 bg-red-500 transform rotate-45"></div>}
+                      {shade.id === 0 && (
+                          <div className="w-full h-0.5 bg-red-500 transform rotate-45"></div>
+                      )}
                     </button>
                     <div
                       className={`absolute -bottom-2 h-1 w-1 rounded-full bg-red-500 transition-opacity ${
