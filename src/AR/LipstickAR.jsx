@@ -1,60 +1,162 @@
 import React, { useEffect, useRef, useState } from "react";
 
-// --- (No changes to LIPSTICK_SHADES or landmark indices) ---
+/* -------------------------- KEEP YOUR SHADE DATA -------------------------- */
 const LIPSTICK_SHADES = [
-{ id: 0, name: "N/A", color: "transparent" },
-{ id: 1, name: "Scarlet Siren", color: "#B82229" },
-{ id: 2, name: "Rouge Eternelle", color: "#8D1D27" },
-{ id: 3, name: "Power Play", color: "#631820" },
-{ id: 4, name: "Spiced Silk", color: "#A64D3E" },
-{ id: 5, name: "Bare Bloom", color: "#D18A68" },
-{ id: 6, name: "Peach Tantra", color: "#F2A36E" },
-{ id: 7, name: "Rose Flame", color: "#C95A6C" },
-{ id: 8, name: "Whisper Nude", color: "#C79082" },
-{ id: 9, name: "Bloom Creme", color: "#D24E71" },
-{ id: 10, name: "Berry Amour", color: "#8A3832" },
-{ id: 11, name: "Cinnamon Saffron", color: "#B64A29" },
-{ id: 12, name: "Oud Royale", color: "#431621" },
-{ id: 13, name: "Velvet Crush", color: "#C22A2D" },
-{ id: 14, name: "Spiced Ember", color: "#A03529" },
-{ id: 15, name: "Creme Blush", color: "#CF5F4C" },
-{ id: 16, name: "Caramel Eclair", color: "#C77444" },
-{ id: 17, name: "Rose Fantasy", color: "#C25D6A" },
-{ id: 18, name: "Mauve Memoir", color: "#A86267" },
-{ id: 19, name: "Rouge Mistral", color: "#94373F" },
-{ id: 20, name: "Flushed Fig", color: "#9A4140" },
-{ id: 21, name: "Terracotta Dream", color: "#C5552F" },
-{ id: 22, name: "Nude Myth", color: "#AF705A" },
-{ id: 23, name: "Runway Rani", color: "#D13864" },
+  { id: 0, name: "N/A", color: "transparent" },
+  { id: 1, name: "Scarlet Siren", color: "#B82229" },
+  { id: 2, name: "Rouge Eternelle", color: "#8D1D27" },
+  { id: 3, name: "Power Play", color: "#631820" },
+  { id: 4, name: "Spiced Silk", color: "#A64D3E" },
+  { id: 5, name: "Bare Bloom", color: "#D18A68" },
+  { id: 6, name: "Peach Tantra", color: "#F2A36E" },
+  { id: 7, name: "Rose Flame", color: "#C95A6C" },
+  { id: 8, name: "Whisper Nude", color: "#C79082" },
+  { id: 9, name: "Bloom Creme", color: "#D24E71" },
+  { id: 10, name: "Berry Amour", color: "#8A3832" },
+  { id: 11, name: "Cinnamon Saffron", color: "#B64A29" },
+  { id: 12, name: "Oud Royale", color: "#431621" },
+  { id: 13, name: "Velvet Crush", color: "#C22A2D" },
+  { id: 14, name: "Spiced Ember", color: "#A03529" },
+  { id: 15, name: "Creme Blush", color: "#CF5F4C" },
+  { id: 16, name: "Caramel Eclair", color: "#C77444" },
+  { id: 17, name: "Rose Fantasy", color: "#C25D6A" },
+  { id: 18, name: "Mauve Memoir", color: "#A86267" },
+  { id: 19, name: "Rouge Mistral", color: "#94373F" },
+  { id: 20, name: "Flushed Fig", color: "#9A4140" },
+  { id: 21, name: "Terracotta Dream", color: "#C5552F" },
+  { id: 22, name: "Nude Myth", color: "#AF705A" },
+  { id: 23, name: "Runway Rani", color: "#D13864" },
 ];
+
 const UPPER_LIP_OUTER = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291];
 const LOWER_LIP_OUTER = [146, 91, 181, 84, 17, 314, 405, 321, 375, 291];
 const UPPER_LIP_INNER = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308];
 const LOWER_LIP_INNER = [95, 88, 178, 87, 14, 317, 402, 318, 324, 308];
 
-// --- MODIFIED: Increased factor for more responsiveness ---
-const SMOOTHING_FACTOR = 0.72;
-const MIN_LIP_SMOOTHING = 0.4;
+/* -------------------------- TUNABLE EXPERIENCE --------------------------- */
+// Adaptive smoothing (velocity-aware): higher = more responsive, lower = more stable
+const BASE_SMOOTHING = 0.70;
+const MIN_LIP_SMOOTHING = 0.40;
 const MAX_LIP_SMOOTHING = 0.92;
 const POSITION_SNAP_THRESHOLD = 0.006;
 
+// Visuals
+const EDGE_FEATHER_PX = 0.9;     // softens edges for realism
+const BASE_OPACITY = 0.84;       // base color laydown
+const SHADOW_BOOST = 0.20;       // slightly stronger in darker areas (keeps depth)
+const DPR_LIMIT = 2;             // cap DPR to control perf on older phones
+
+// Performance
+const COLORIZE_EVERY_N_FRAMES = 1; // 1 = every frame, 2 = every other frame
+const MAX_BBOX_PAD = 8;            // extra pixels around the lip bbox (CSS px)
+
+/* -------------------------- UTILITY: COLOR SPACE ------------------------- */
+function hexToRgb(hex) {
+  if (hex === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return m
+    ? { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16), a: 255 }
+    : { r: 200, g: 0, b: 0, a: 255 };
+}
+
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s, l = (max + min) / 2;
+  if (max === min) { h = s = 0; }
+  else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
+      default: h = 0;
+    }
+    h /= 6;
+  }
+  return { h, s, l };
+}
+function hslToRgb(h, s, l) {
+  function hue2rgb(p, q, t) {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1/6) return p + (q - p) * 6 * t;
+    if (t < 1/2) return q;
+    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+    return p;
+  }
+  let r, g, b;
+  if (s === 0) { r = g = b = l; }
+  else {
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1/3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1/3);
+  }
+  return { r: Math.round(r * 255), g: Math.round(g * 255), b: Math.round(b * 255) };
+}
+
+/* ---------------------------- GEOMETRY HELPERS --------------------------- */
 const LIP_LANDMARK_INDICES = new Set([
-  ...UPPER_LIP_OUTER,
-  ...LOWER_LIP_OUTER,
-  ...UPPER_LIP_INNER,
-  ...LOWER_LIP_INNER,
+  ...UPPER_LIP_OUTER, ...LOWER_LIP_OUTER, ...UPPER_LIP_INNER, ...LOWER_LIP_INNER,
 ]);
 
+// Slightly smooth polygon points with Chaikin’s algorithm (keeps the silhouette organic)
+function smoothPolyline(points, iterations = 1) {
+  let pts = points.slice();
+  for (let k = 0; k < iterations; k++) {
+    const out = [];
+    for (let i = 0; i < pts.length; i++) {
+      const p0 = pts[i];
+      const p1 = pts[(i + 1) % pts.length];
+      const Q = { x: 0.75 * p0.x + 0.25 * p1.x, y: 0.75 * p0.y + 0.25 * p1.y };
+      const R = { x: 0.25 * p0.x + 0.75 * p1.x, y: 0.25 * p0.y + 0.75 * p1.y };
+      out.push(Q, R);
+    }
+    pts = out;
+  }
+  return pts;
+}
+function makePathFromRings(outerPts, innerPts) {
+  const path = new Path2D();
+  path.moveTo(outerPts[0].x, outerPts[0].y);
+  for (let i = 1; i < outerPts.length; i++) path.lineTo(outerPts[i].x, outerPts[i].y);
+  path.closePath();
+  if (innerPts && innerPts.length) {
+    path.moveTo(innerPts[0].x, innerPts[0].y);
+    for (let i = 1; i < innerPts.length; i++) path.lineTo(innerPts[i].x, innerPts[i].y);
+    path.closePath();
+  }
+  return path;
+}
+function computeBBox(points) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
+}
+
+/* ------------------------------ COMPONENT -------------------------------- */
 export default function VirtualTryOn() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
+
   const faceMeshRef = useRef(null);
   const streamRef = useRef(null);
-  const animationFrameRef = useRef(null);
-  const latestLandmarksRef = useRef(null);
+  const afRef = useRef(null);
+  const latestResultsRef = useRef(null);
+
   const lastGoodLandmarksRef = useRef(null);
   const smoothedLandmarksRef = useRef(null);
+  const frameCountRef = useRef(0);
 
+  const maskCanvasRef = useRef(null); // offscreen mask
   const [scriptLoaded, setScriptLoaded] = useState(false);
   const [started, setStarted] = useState(false);
   const [selectedShade, setSelectedShade] = useState(LIPSTICK_SHADES[0]);
@@ -62,28 +164,23 @@ export default function VirtualTryOn() {
   const [snapshot, setSnapshot] = useState(null);
 
   const selectedColorRef = useRef(selectedShade.color);
+  useEffect(() => { selectedColorRef.current = selectedShade.color; }, [selectedShade]);
 
-  useEffect(() => {
-    selectedColorRef.current = selectedShade.color;
-  }, [selectedShade]);
-
+  // Lock scroll (same as yours)
   useEffect(() => {
     const { style } = document.body;
-    const previousOverflow = style.overflow;
+    const prev = style.overflow;
     style.overflow = "hidden";
-    return () => {
-      style.overflow = previousOverflow;
-    };
+    return () => { style.overflow = prev; };
   }, []);
 
-  // --- (No changes to useEffect for script loading and FaceMesh setup) ---
+  // Load MediaPipe FaceMesh
   useEffect(() => {
     const script = document.createElement("script");
     script.src = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
     script.crossOrigin = "anonymous";
     script.onload = () => setScriptLoaded(true);
     document.head.appendChild(script);
-
     return () => {
       const scripts = Array.from(document.head.getElementsByTagName("script"));
       const thisScript = scripts.find((s) => s.src === script.src);
@@ -91,39 +188,57 @@ export default function VirtualTryOn() {
     };
   }, []);
 
+  // Setup FaceMesh + lifecycle
   useEffect(() => {
     if (!scriptLoaded) return;
-
     const faceMesh = new window.FaceMesh({
-      locateFile: (file) =>
-        `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
     });
     faceMesh.setOptions({
       maxNumFaces: 1,
       refineLandmarks: true,
-      minDetectionConfidence: 0.5,
-      minTrackingConfidence: 0.5,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.6,
+      // selfieMode intentionally NOT set to keep coord system consistent with our mirroring
+    });
+    faceMesh.onResults((results) => {
+      latestResultsRef.current = results;
+      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+        lastGoodLandmarksRef.current = results.multiFaceLandmarks[0];
+      }
     });
     faceMeshRef.current = faceMesh;
 
+    const onVis = () => {
+      if (document.hidden) stopCamera();
+      // When tab becomes active again, user can press Start.
+    };
+    document.addEventListener("visibilitychange", onVis);
     return () => {
+      document.removeEventListener("visibilitychange", onVis);
       stopCamera();
-      if (faceMeshRef.current && typeof faceMeshRef.current.close === "function") {
-        faceMeshRef.current.close();
-      }
+      faceMeshRef.current?.close?.();
     };
   }, [scriptLoaded]);
 
-  // --- (No changes to stopCamera or startCamera) ---
-  const stopCamera = () => {
-    if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+  /* ------------------------------- CAMERA -------------------------------- */
+  function stopCamera() {
+    if (afRef.current) {
+      if ("cancelVideoFrameCallback" in HTMLVideoElement.prototype && videoRef.current?.cancelVideoFrameCallback) {
+        try { videoRef.current.cancelVideoFrameCallback(afRef.current); } catch {}
+      } else {
+        cancelAnimationFrame(afRef.current);
+      }
+      afRef.current = null;
+    }
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
-  };
+    smoothedLandmarksRef.current = null;
+  }
 
-  const startCamera = async () => {
+  async function startCamera() {
     if (!scriptLoaded) {
       setError("Resources are still loading, please try again in a moment.");
       return;
@@ -132,177 +247,252 @@ export default function VirtualTryOn() {
     setStarted(true);
     try {
       stopCamera();
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: "user" },
-      });
+      const constraints = {
+        video: {
+          facingMode: "user",
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30, max: 60 },
+          resizeMode: "crop-and-scale",
+        },
+        audio: false,
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
+
       const video = videoRef.current;
+      video.setAttribute("playsinline", "true");
+      video.muted = true;
       video.srcObject = stream;
-      await new Promise((resolve) => {
-        video.onloadedmetadata = () => {
-          video.play();
-          resolve();
-        };
-      });
+      await new Promise((resolve) => (video.onloadedmetadata = () => { video.play(); resolve(); }));
 
-      const canvas = canvasRef.current;
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-
+      setupCanvas();
       startProcessing();
+      window.addEventListener("resize", setupCanvas);
+      window.addEventListener("orientationchange", setupCanvas);
     } catch (e) {
       console.error(e);
-      setError(
-        "Camera access is required. Please allow camera permissions and refresh."
-      );
+      setError("Camera access is required. Please allow camera permissions and refresh.");
       setStarted(false);
     }
-  };
+  }
 
-  const startProcessing = () => {
+  function setupCanvas() {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+
+    const DPR = Math.min(window.devicePixelRatio || 1, DPR_LIMIT);
+    const w = video.videoWidth || 1280;
+    const h = video.videoHeight || 720;
+
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    canvas.width = Math.max(2, Math.floor(w * DPR));
+    canvas.height = Math.max(2, Math.floor(h * DPR));
+
+    // High quality scaling for all 2D operations
+    const ctx = canvas.getContext("2d", { alpha: true, desynchronized: true });
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+
+    // Offscreen mask canvas (device pixels)
+    if (!maskCanvasRef.current) maskCanvasRef.current = document.createElement("canvas");
+  }
+
+  /* ------------------------------ PROCESSING ----------------------------- */
+  function startProcessing() {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const ctx = canvas.getContext("2d");
-    const { width, height } = canvas;
+    const DPR = Math.min(window.devicePixelRatio || 1, DPR_LIMIT);
 
-    faceMeshRef.current.onResults((results) => {
-      latestLandmarksRef.current = results;
-      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-        lastGoodLandmarksRef.current = results.multiFaceLandmarks[0];
-      }
-    });
+    const step = async () => {
+      if (!video || !faceMeshRef.current) return;
 
-    const processFrame = async () => {
-      if (!videoRef.current) return;
-
-      if (video.readyState >= 4) {
+      // Send a frame to FaceMesh when ready
+      if (video.readyState >= 2) {
         await faceMeshRef.current.send({ image: video });
       }
 
+      // Draw video (mirrored) into canvas at retina resolution
+      const w = canvas.width / DPR;
+      const h = canvas.height / DPR;
       ctx.save();
-      ctx.clearRect(0, 0, width, height);
-      ctx.translate(width, 0);
-      ctx.scale(-1, 1);
-      ctx.drawImage(video, 0, 0, width, height);
+      ctx.setTransform(-DPR, 0, 0, DPR, canvas.width, 0); // mirror at retina scale
+      ctx.drawImage(video, 0, 0, w, h);
 
-      // --- MODIFIED: Added logic to reset smoothing when face is lost/re-found ---
-      const rawLandmarks = latestLandmarksRef.current?.multiFaceLandmarks?.[0];
-
-      if (rawLandmarks) {
-        // If we have raw landmarks but no smoothed ones (i.e., first frame or after losing tracking),
-        // initialize the smoothed landmarks directly to prevent a "sliding" effect.
+      // Landmarks — reset smoothing when tracking reacquires
+      const raw = latestResultsRef.current?.multiFaceLandmarks?.[0] || null;
+      if (raw) {
         if (!smoothedLandmarksRef.current) {
-          smoothedLandmarksRef.current = JSON.parse(JSON.stringify(rawLandmarks));
+          smoothedLandmarksRef.current = raw.map((p) => ({ x: p.x, y: p.y, z: p.z || 0 }));
         } else {
-          // Apply Exponential Moving Average (EMA) smoothing
-          for (let i = 0; i < rawLandmarks.length; i++) {
-            const smoothed = smoothedLandmarksRef.current[i];
-            const current = rawLandmarks[i];
-            let blendFactor = SMOOTHING_FACTOR;
+          // velocity-aware EMA
+          for (let i = 0; i < raw.length; i++) {
+            const s = smoothedLandmarksRef.current[i];
+            const c = raw[i];
+            let blend = BASE_SMOOTHING;
             if (LIP_LANDMARK_INDICES.has(i)) {
-              const deltaX = current.x - smoothed.x;
-              const deltaY = current.y - smoothed.y;
-              const planarDelta = Math.hypot(deltaX, deltaY);
-              const ratio = Math.min(1, planarDelta / POSITION_SNAP_THRESHOLD);
-              blendFactor =
-                MIN_LIP_SMOOTHING +
-                (MAX_LIP_SMOOTHING - MIN_LIP_SMOOTHING) * ratio;
+              const dx = c.x - s.x, dy = c.y - s.y;
+              const planar = Math.hypot(dx, dy);
+              const ratio = Math.min(1, planar / POSITION_SNAP_THRESHOLD);
+              blend = MIN_LIP_SMOOTHING + (MAX_LIP_SMOOTHING - MIN_LIP_SMOOTHING) * ratio;
             }
-            smoothed.x += (current.x - smoothed.x) * blendFactor;
-            smoothed.y += (current.y - smoothed.y) * blendFactor;
-            // z-smoothing can be less aggressive if needed
-            smoothed.z += (current.z - smoothed.z) * blendFactor * 0.5;
+            s.x += (c.x - s.x) * blend;
+            s.y += (c.y - s.y) * blend;
+            s.z += (c.z - s.z) * (blend * 0.5);
           }
         }
       } else {
-        // If we lose tracking, reset the smoothed landmarks.
-        smoothedLandmarksRef.current = null;
+        smoothedLandmarksRef.current = null; // guarantees no drift after lost tracking
       }
 
-      // Use smoothed landmarks if available, otherwise fall back to the last good raw landmarks
-      const landmarksToDraw = smoothedLandmarksRef.current || lastGoodLandmarksRef.current;
+      const drawLm = smoothedLandmarksRef.current || lastGoodLandmarksRef.current;
+      if (drawLm) {
+        // 1) Build path for visual anti-aliased fill (on mirrored context)
+        const outerU = getLipPoints(drawLm, UPPER_LIP_OUTER, w, h);
+        const outerL = getLipPoints(drawLm, LOWER_LIP_OUTER, w, h);
+        const innerU = getLipPoints(drawLm, UPPER_LIP_INNER, w, h);
+        const innerL = getLipPoints(drawLm, LOWER_LIP_INNER, w, h);
 
-      if (landmarksToDraw) {
-        drawLipstick(ctx, landmarksToDraw, width, height);
+        const outerRing = smoothPolyline([...outerU, ...outerL.slice().reverse()], 1);
+        const innerRing = smoothPolyline([...innerU, ...innerL.slice().reverse()], 1);
+
+        // Subtle foundation pass to anchor the shape (fast compositing only)
+        if (selectedColorRef.current !== "transparent") {
+          const path = makePathFromRings(outerRing, innerRing);
+          ctx.globalCompositeOperation = "multiply";
+          ctx.globalAlpha = 0.28;
+          ctx.fillStyle = selectedColorRef.current;
+          ctx.filter = "none";
+          ctx.fill(path, "evenodd");
+          ctx.globalAlpha = 1;
+        }
+
+        // 2) Premium colorization (per-pixel) within a tight bbox in *unmirrored* space
+        if (selectedColorRef.current !== "transparent") {
+          if (frameCountRef.current % COLORIZE_EVERY_N_FRAMES === 0) {
+            // Build points in canvas pixel space WITHOUT the mirror transform:
+            const outerU_px = getLipPointsPx(drawLm, UPPER_LIP_OUTER, w, h);
+            const outerL_px = getLipPointsPx(drawLm, LOWER_LIP_OUTER, w, h);
+            const innerU_px = getLipPointsPx(drawLm, UPPER_LIP_INNER, w, h);
+            const innerL_px = getLipPointsPx(drawLm, LOWER_LIP_INNER, w, h);
+
+            const outer_px = smoothPolyline([...outerU_px, ...outerL_px.slice().reverse()], 1);
+            const inner_px = smoothPolyline([...innerU_px, ...innerL_px.slice().reverse()], 1);
+
+            // Tight bbox + pad (CSS px)
+            const bbox = computeBBox(outer_px);
+            const pad = Math.min(MAX_BBOX_PAD, Math.max(2, Math.round(Math.max(bbox.w, bbox.h) * 0.04)));
+            const bx = Math.max(0, Math.floor(bbox.x - pad));
+            const by = Math.max(0, Math.floor(bbox.y - pad));
+            const bw = Math.min(w - bx, Math.ceil(bbox.w + pad * 2));
+            const bh = Math.min(h - by, Math.ceil(bbox.h + pad * 2));
+
+            // Read pixels in device pixels
+            const sx = Math.floor(bx * DPR), sy = Math.floor(by * DPR);
+            const sw = Math.max(1, Math.floor(bw * DPR)), sh = Math.max(1, Math.floor(bh * DPR));
+            const frame = ctx.getImageData(sx, sy, sw, sh);
+
+            // Build feathered lip mask in device pixels (aligned to the bbox)
+            const mCanvas = maskCanvasRef.current;
+            mCanvas.width = sw; mCanvas.height = sh;
+            const mctx = mCanvas.getContext("2d");
+            mctx.clearRect(0, 0, sw, sh);
+            mctx.save();
+            // Draw using device pixels; scale ring coords by DPR & offset by bbox*DPR
+            const toDevice = (p) => ({ x: Math.round((p.x - bx) * DPR), y: Math.round((p.y - by) * DPR) });
+            const outerD = outer_px.map(toDevice);
+            const innerD = inner_px.map(toDevice);
+
+            const maskPath = makePathFromRings(outerD, innerD);
+            mctx.filter = `blur(${EDGE_FEATHER_PX * DPR}px)`; // feather for realism
+            mctx.fillStyle = "#fff";
+            mctx.fill(maskPath, "evenodd");
+            mctx.restore();
+            const mask = mctx.getImageData(0, 0, sw, sh);
+
+            // Colorize using “color” blend: keep base lightness (lip shading), apply bullet hue/sat
+            const { r: tr, g: tg, b: tb } = hexToRgb(selectedColorRef.current);
+            const thsl = rgbToHsl(tr, tg, tb);
+            const data = frame.data;
+            const mdata = mask.data;
+            for (let i = 0; i < data.length; i += 4) {
+              const ma = mdata[i + 3] / 255; // mask alpha
+              if (ma < 0.01) continue;
+
+              const r = data[i], g = data[i + 1], b = data[i + 2];
+              const { l } = rgbToHsl(r, g, b);
+
+              // adaptive opacity: slightly more where lips are darker to keep depth
+              const a = Math.min(1, Math.max(0, BASE_OPACITY + SHADOW_BOOST * (0.5 - l))) * ma;
+
+              // apply target hue/sat with original lightness
+              const nrgb = hslToRgb(thsl.h, thsl.s, l);
+              data[i]   = Math.round(nrgb.r * a + r * (1 - a));
+              data[i+1] = Math.round(nrgb.g * a + g * (1 - a));
+              data[i+2] = Math.round(nrgb.b * a + b * (1 - a));
+              // keep source alpha
+            }
+
+            // Write back
+            ctx.setTransform(1, 0, 0, 1, 0, 0); // reset transform for putImageData coords
+            ctx.putImageData(frame, sx, sy);
+            // restore transform for next loop
+            ctx.setTransform(-DPR, 0, 0, DPR, canvas.width, 0);
+          }
+          frameCountRef.current++;
+        }
       }
-      
+
       ctx.restore();
-      animationFrameRef.current = requestAnimationFrame(processFrame);
+
+      // Schedule next frame
+      if ("requestVideoFrameCallback" in HTMLVideoElement.prototype && videoRef.current?.requestVideoFrameCallback) {
+        afRef.current = videoRef.current.requestVideoFrameCallback(() => step());
+      } else {
+        afRef.current = requestAnimationFrame(step);
+      }
     };
 
-    processFrame();
-  };
+    // Kick off
+    step();
+  }
 
-  // --- (No changes to takeSnapshot, getLipPoints, or drawLipstick) ---
-  const takeSnapshot = () => {
+  /* ------------------------------- HELPERS -------------------------------- */
+  function getLipPoints(landmarks, indices, w, h) {
+    // points for drawing on the mirrored context (we draw after mirroring)
+    return indices.map((i) => ({ x: landmarks[i].x * w, y: landmarks[i].y * h }));
+  }
+  function getLipPointsPx(landmarks, indices, w, h) {
+    // points in canvas pixel space *without* mirroring (for get/putImageData)
+    // because we draw video mirrored, we must mirror x to match the drawn pixels
+    return indices.map((i) => ({ x: (w - landmarks[i].x * w), y: landmarks[i].y * h }));
+  }
+
+  function takeSnapshot() {
     const canvas = canvasRef.current;
     if (canvas) {
-      const dataUrl = canvas.toDataURL("image/png");
-      setSnapshot(dataUrl);
+      // snapshot in display pixels
+      const DPR = Math.min(window.devicePixelRatio || 1, DPR_LIMIT);
+      const tmp = document.createElement("canvas");
+      tmp.width = Math.floor(canvas.width / DPR);
+      tmp.height = Math.floor(canvas.height / DPR);
+      const tctx = tmp.getContext("2d");
+      tctx.drawImage(canvas, 0, 0, tmp.width, tmp.height);
+      setSnapshot(tmp.toDataURL("image/png"));
     }
-  };
+  }
 
-  const getLipPoints = (landmarks, indices, w, h) => {
-    return indices.map((i) => ({ x: landmarks[i].x * w, y: landmarks[i].y * h }));
-  };
-
-  const drawLipstick = (ctx, landmarks, w, h) => {
-    if (selectedColorRef.current === "transparent") return;
-
-    const upperOuterPts = getLipPoints(landmarks, UPPER_LIP_OUTER, w, h);
-    const upperInnerPts = getLipPoints(landmarks, UPPER_LIP_INNER, w, h);
-    const lowerOuterPts = getLipPoints(landmarks, LOWER_LIP_OUTER, w, h);
-    const lowerInnerPts = getLipPoints(landmarks, LOWER_LIP_INNER, w, h);
-
-    const lipShape = new Path2D();
-    lipShape.moveTo(upperOuterPts[0].x, upperOuterPts[0].y);
-    for (let i = 1; i < upperOuterPts.length; i++)
-      lipShape.lineTo(upperOuterPts[i].x, upperOuterPts[i].y);
-    for (let i = lowerOuterPts.length - 1; i >= 0; i--)
-      lipShape.lineTo(lowerOuterPts[i].x, lowerOuterPts[i].y);
-    lipShape.closePath();
-
-    const mouthOpening = new Path2D();
-    mouthOpening.moveTo(upperInnerPts[0].x, upperInnerPts[0].y);
-    for (let i = 1; i < upperInnerPts.length; i++)
-      mouthOpening.lineTo(upperInnerPts[i].x, upperInnerPts[i].y);
-    for (let i = lowerInnerPts.length - 1; i >= 0; i--)
-      mouthOpening.lineTo(lowerInnerPts[i].x, lowerInnerPts[i].y);
-    mouthOpening.closePath();
-
-    lipShape.addPath(mouthOpening);
-
-    ctx.save();
-    ctx.fillStyle = selectedColorRef.current;
-
-    ctx.shadowColor = selectedColorRef.current;
-    ctx.shadowBlur = 15;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
-    
-    ctx.globalCompositeOperation = "multiply";
-    ctx.globalAlpha = 0.7;
-    ctx.fill(lipShape, "evenodd");
-    
-    ctx.shadowBlur = 0;
-
-    ctx.globalCompositeOperation = "overlay";
-    ctx.globalAlpha = 0.4;
-    ctx.fill(lipShape, "evenodd");
-
-    ctx.globalCompositeOperation = "soft-light";
-    ctx.globalAlpha = 0.5;
-    ctx.fill(lipShape, "evenodd");
-    
-    ctx.restore();
-  };
-
-  // --- (No changes to the JSX return) ---
+  /* --------------------------------- UI ----------------------------------- */
   return (
-    <div className="fixed inset-0 bg-gray-900 font-sans flex items-center justify-center ">
+    <div className="fixed inset-0 bg-gray-900 font-sans flex items-center justify-center">
       <div className="relative w-full h-full bg-black flex items-center justify-center">
         <video ref={videoRef} className="hidden" playsInline muted />
         <canvas ref={canvasRef} className="max-w-full max-h-full object-cover rounded-lg" />
+
+        {/* Snapshot overlay */}
         {snapshot && (
           <div className="absolute inset-0 bg-black/80 z-30 flex flex-col items-center justify-center p-4">
             <img
@@ -327,6 +517,8 @@ export default function VirtualTryOn() {
             </div>
           </div>
         )}
+
+        {/* Start overlay */}
         {!started && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-20 p-4">
             <button
@@ -337,6 +529,8 @@ export default function VirtualTryOn() {
             </button>
           </div>
         )}
+
+        {/* Error overlay */}
         {error && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/70 p-4 z-20">
             <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 sm:px-6 sm:py-4 rounded-xl text-center w-11/12 max-w-md">
@@ -345,6 +539,8 @@ export default function VirtualTryOn() {
             </div>
           </div>
         )}
+
+        {/* Controls */}
         {started && !snapshot && (
           <div className="absolute bottom-0 left-0 right-0 p-4 sm:p-6 bg-black/30 z-10">
             <div className="max-w-6xl mx-auto flex flex-col items-center gap-4 md:gap-5">
@@ -354,20 +550,15 @@ export default function VirtualTryOn() {
                     <button
                       onClick={() => setSelectedShade(shade)}
                       className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full transition-transform duration-200 ease-in-out border border-white/30 flex items-center justify-center overflow-hidden
-                        ${selectedShade.id === shade.id ? "scale-110 ring-2 ring-white ring-offset-2 ring-offset-black/50" : "hover:scale-110"}`
-                      }
+                        ${selectedShade.id === shade.id ? "scale-110 ring-2 ring-white ring-offset-2 ring-offset-black/50" : "hover:scale-110"}`}
                       style={{ backgroundColor: shade.color === 'transparent' ? '#4a4a4a' : shade.color }}
                       title={shade.name}
                     >
-                      {shade.id === 0 && (
-                          <div className="w-full h-0.5 bg-red-500 transform rotate-45"></div>
-                      )}
+                      {shade.id === 0 && <div className="w-full h-0.5 bg-red-500 transform rotate-45"></div>}
                     </button>
                     <div
-                      className={`absolute -bottom-2 h-1 w-1 rounded-full bg-red-500 transition-opacity ${
-                        selectedShade.id === shade.id ? "opacity-100" : "opacity-0"
-                      }`}
-                    ></div>
+                      className={`absolute -bottom-2 h-1 w-1 rounded-full bg-red-500 transition-opacity ${selectedShade.id === shade.id ? "opacity-100" : "opacity-0"}`}
+                    />
                   </div>
                 ))}
               </div>
@@ -378,10 +569,7 @@ export default function VirtualTryOn() {
                 <button className="p-2 md:p-3 hover:bg-white/10 rounded-full">
                   <svg className="w-5 h-5 md:w-6 md:h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"></path><path d="M12 18a6 6 0 0 0 0-12v12z"></path></svg>
                 </button>
-                <button
-                  onClick={takeSnapshot}
-                  className="w-16 h-16 md:w-20 md:h-20 rounded-full bg-white p-1.5 shadow-lg active:scale-95 transition-transform"
-                >
+                <button onClick={takeSnapshot} className="w-16 h-16 md:w-20 md:h-20 rounded-full bg-white p-1.5 shadow-lg active:scale-95 transition-transform">
                   <div className="w-full h-full rounded-full border-2 border-black"></div>
                 </button>
                 <button className="p-2 md:p-3 hover:bg-white/10 rounded-full">
