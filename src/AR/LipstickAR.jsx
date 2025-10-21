@@ -145,12 +145,14 @@ function computeBBox(points) {
 /* ------------------------------ COMPONENT -------------------------------- */
 export default function VirtualTryOn() {
   const videoRef = useRef(null);
-  const canvasRef = useRef(null);
+  const canvasRef = useRef(null); // FRONT buffer (visible)
+  const backCanvasRef = useRef(null); // BACK buffer (offscreen)
 
   const faceMeshRef = useRef(null);
   const streamRef = useRef(null);
   const afRef = useRef(null);
   const latestResultsRef = useRef(null);
+  const sendingRef = useRef(false); // <- prevent overlapping FaceMesh .send (flicker source)
 
   const lastGoodLandmarksRef = useRef(null);
   const smoothedLandmarksRef = useRef(null);
@@ -166,7 +168,7 @@ export default function VirtualTryOn() {
   const selectedColorRef = useRef(selectedShade.color);
   useEffect(() => { selectedColorRef.current = selectedShade.color; }, [selectedShade]);
 
-  // Lock scroll (same as yours)
+  // Lock scroll
   useEffect(() => {
     const { style } = document.body;
     const prev = style.overflow;
@@ -199,7 +201,7 @@ export default function VirtualTryOn() {
       refineLandmarks: true,
       minDetectionConfidence: 0.6,
       minTrackingConfidence: 0.6,
-      // selfieMode intentionally NOT set to keep coord system consistent with our mirroring
+      selfieMode: false, // keep coords unmirrored; we mirror draw only
     });
     faceMesh.onResults((results) => {
       latestResultsRef.current = results;
@@ -211,7 +213,6 @@ export default function VirtualTryOn() {
 
     const onVis = () => {
       if (document.hidden) stopCamera();
-      // When tab becomes active again, user can press Start.
     };
     document.addEventListener("visibilitychange", onVis);
     return () => {
@@ -291,10 +292,15 @@ export default function VirtualTryOn() {
     canvas.width = Math.max(2, Math.floor(w * DPR));
     canvas.height = Math.max(2, Math.floor(h * DPR));
 
-    // High quality scaling for all 2D operations
-    const ctx = canvas.getContext("2d", { alpha: true, desynchronized: true });
+    // FRONT buffer context—avoid desynchronized for consistency (prevents tearing)
+    const ctx = canvas.getContext("2d", { alpha: true });
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
+
+    // BACK buffer canvas (device pixels)
+    if (!backCanvasRef.current) backCanvasRef.current = document.createElement("canvas");
+    backCanvasRef.current.width = canvas.width;
+    backCanvasRef.current.height = canvas.height;
 
     // Offscreen mask canvas (device pixels)
     if (!maskCanvasRef.current) maskCanvasRef.current = document.createElement("canvas");
@@ -303,24 +309,34 @@ export default function VirtualTryOn() {
   /* ------------------------------ PROCESSING ----------------------------- */
   function startProcessing() {
     const video = videoRef.current;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
+    const frontCanvas = canvasRef.current;
+    const frontCtx = frontCanvas.getContext("2d");
+    const backCanvas = backCanvasRef.current;
+    const backCtx = backCanvas.getContext("2d");
     const DPR = Math.min(window.devicePixelRatio || 1, DPR_LIMIT);
 
     const step = async () => {
       if (!video || !faceMeshRef.current) return;
 
-      // Send a frame to FaceMesh when ready
-      if (video.readyState >= 2) {
-        await faceMeshRef.current.send({ image: video });
+      // Pace FaceMesh: never allow overlapping .send() (this causes flicker/jank)
+      if (video.readyState >= 2 && !sendingRef.current) {
+        try {
+          sendingRef.current = true;
+          await faceMeshRef.current.send({ image: video });
+        } finally {
+          sendingRef.current = false;
+        }
       }
 
-      // Draw video (mirrored) into canvas at retina resolution
-      const w = canvas.width / DPR;
-      const h = canvas.height / DPR;
-      ctx.save();
-      ctx.setTransform(-DPR, 0, 0, DPR, canvas.width, 0); // mirror at retina scale
-      ctx.drawImage(video, 0, 0, w, h);
+      // Draw everything to BACK buffer first (atomic compose), then blit to FRONT
+      const w = frontCanvas.width / DPR;
+      const h = frontCanvas.height / DPR;
+
+      // reset and mirror video on back buffer
+      backCtx.setTransform(1, 0, 0, 1, 0, 0);
+      backCtx.clearRect(0, 0, backCanvas.width, backCanvas.height);
+      backCtx.setTransform(-DPR, 0, 0, DPR, backCanvas.width, 0); // mirror at retina scale
+      backCtx.drawImage(video, 0, 0, w, h);
 
       // Landmarks — reset smoothing when tracking reacquires
       const raw = latestResultsRef.current?.multiFaceLandmarks?.[0] || null;
@@ -359,15 +375,15 @@ export default function VirtualTryOn() {
         const outerRing = smoothPolyline([...outerU, ...outerL.slice().reverse()], 1);
         const innerRing = smoothPolyline([...innerU, ...innerL.slice().reverse()], 1);
 
-        // Subtle foundation pass to anchor the shape (fast compositing only)
         if (selectedColorRef.current !== "transparent") {
           const path = makePathFromRings(outerRing, innerRing);
-          ctx.globalCompositeOperation = "multiply";
-          ctx.globalAlpha = 0.28;
-          ctx.fillStyle = selectedColorRef.current;
-          ctx.filter = "none";
-          ctx.fill(path, "evenodd");
-          ctx.globalAlpha = 1;
+          backCtx.globalCompositeOperation = "multiply";
+          backCtx.globalAlpha = 0.28;
+          backCtx.fillStyle = selectedColorRef.current;
+          backCtx.filter = "none";
+          backCtx.fill(path, "evenodd");
+          backCtx.globalAlpha = 1;
+          backCtx.globalCompositeOperation = "source-over";
         }
 
         // 2) Premium colorization (per-pixel) within a tight bbox in *unmirrored* space
@@ -382,7 +398,6 @@ export default function VirtualTryOn() {
             const outer_px = smoothPolyline([...outerU_px, ...outerL_px.slice().reverse()], 1);
             const inner_px = smoothPolyline([...innerU_px, ...innerL_px.slice().reverse()], 1);
 
-            // Tight bbox + pad (CSS px)
             const bbox = computeBBox(outer_px);
             const pad = Math.min(MAX_BBOX_PAD, Math.max(2, Math.round(Math.max(bbox.w, bbox.h) * 0.04)));
             const bx = Math.max(0, Math.floor(bbox.x - pad));
@@ -390,22 +405,20 @@ export default function VirtualTryOn() {
             const bw = Math.min(w - bx, Math.ceil(bbox.w + pad * 2));
             const bh = Math.min(h - by, Math.ceil(bbox.h + pad * 2));
 
-            // Read pixels in device pixels
             const sx = Math.floor(bx * DPR), sy = Math.floor(by * DPR);
             const sw = Math.max(1, Math.floor(bw * DPR)), sh = Math.max(1, Math.floor(bh * DPR));
-            const frame = ctx.getImageData(sx, sy, sw, sh);
+            const frame = backCtx.getImageData(sx, sy, sw, sh);
 
             // Build feathered lip mask in device pixels (aligned to the bbox)
             const mCanvas = maskCanvasRef.current;
             mCanvas.width = sw; mCanvas.height = sh;
             const mctx = mCanvas.getContext("2d");
+            mctx.setTransform(1, 0, 0, 1, 0, 0);
             mctx.clearRect(0, 0, sw, sh);
             mctx.save();
-            // Draw using device pixels; scale ring coords by DPR & offset by bbox*DPR
             const toDevice = (p) => ({ x: Math.round((p.x - bx) * DPR), y: Math.round((p.y - by) * DPR) });
             const outerD = outer_px.map(toDevice);
             const innerD = inner_px.map(toDevice);
-
             const maskPath = makePathFromRings(outerD, innerD);
             mctx.filter = `blur(${EDGE_FEATHER_PX * DPR}px)`; // feather for realism
             mctx.fillStyle = "#fff";
@@ -413,7 +426,6 @@ export default function VirtualTryOn() {
             mctx.restore();
             const mask = mctx.getImageData(0, 0, sw, sh);
 
-            // Colorize using “color” blend: keep base lightness (lip shading), apply bullet hue/sat
             const { r: tr, g: tg, b: tb } = hexToRgb(selectedColorRef.current);
             const thsl = rgbToHsl(tr, tg, tb);
             const data = frame.data;
@@ -425,28 +437,26 @@ export default function VirtualTryOn() {
               const r = data[i], g = data[i + 1], b = data[i + 2];
               const { l } = rgbToHsl(r, g, b);
 
-              // adaptive opacity: slightly more where lips are darker to keep depth
               const a = Math.min(1, Math.max(0, BASE_OPACITY + SHADOW_BOOST * (0.5 - l))) * ma;
 
-              // apply target hue/sat with original lightness
               const nrgb = hslToRgb(thsl.h, thsl.s, l);
               data[i]   = Math.round(nrgb.r * a + r * (1 - a));
               data[i+1] = Math.round(nrgb.g * a + g * (1 - a));
               data[i+2] = Math.round(nrgb.b * a + b * (1 - a));
-              // keep source alpha
             }
 
-            // Write back
-            ctx.setTransform(1, 0, 0, 1, 0, 0); // reset transform for putImageData coords
-            ctx.putImageData(frame, sx, sy);
-            // restore transform for next loop
-            ctx.setTransform(-DPR, 0, 0, DPR, canvas.width, 0);
+            // Write back to BACK buffer using identity transform
+            backCtx.setTransform(1, 0, 0, 1, 0, 0);
+            backCtx.putImageData(frame, sx, sy);
           }
           frameCountRef.current++;
         }
       }
 
-      ctx.restore();
+      // Atomic present: blit BACK -> FRONT (no transforms on FRONT)
+      frontCtx.setTransform(1, 0, 0, 1, 0, 0);
+      frontCtx.clearRect(0, 0, frontCanvas.width, frontCanvas.height);
+      frontCtx.drawImage(backCanvas, 0, 0);
 
       // Schedule next frame
       if ("requestVideoFrameCallback" in HTMLVideoElement.prototype && videoRef.current?.requestVideoFrameCallback) {
@@ -474,7 +484,6 @@ export default function VirtualTryOn() {
   function takeSnapshot() {
     const canvas = canvasRef.current;
     if (canvas) {
-      // snapshot in display pixels
       const DPR = Math.min(window.devicePixelRatio || 1, DPR_LIMIT);
       const tmp = document.createElement("canvas");
       tmp.width = Math.floor(canvas.width / DPR);
