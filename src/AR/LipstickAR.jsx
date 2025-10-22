@@ -34,21 +34,38 @@ const UPPER_LIP_INNER = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308];
 const LOWER_LIP_INNER = [95, 88, 178, 87, 14, 317, 402, 318, 324, 308];
 
 /* -------------------------- TUNABLE EXPERIENCE --------------------------- */
-// Adaptive smoothing (velocity-aware): higher = more responsive, lower = more stable
 const BASE_SMOOTHING = 0.70;
 const MIN_LIP_SMOOTHING = 0.40;
 const MAX_LIP_SMOOTHING = 0.92;
 const POSITION_SNAP_THRESHOLD = 0.006;
 
 // Visuals
-const EDGE_FEATHER_PX = 0.9;     // softens edges for realism
-const BASE_OPACITY = 0.84;       // base color laydown
-const SHADOW_BOOST = 0.20;       // slightly stronger in darker areas (keeps depth)
-const DPR_LIMIT = 2;             // cap DPR to control perf on older phones
+const EDGE_FEATHER_PX = 0.9;
+const BASE_OPACITY = 0.84;
+const SHADOW_BOOST = 0.20;
+const DPR_LIMIT = 2;
 
 // Performance
-const COLORIZE_EVERY_N_FRAMES = 1; // 1 = every frame, 2 = every other frame
-const MAX_BBOX_PAD = 8;            // extra pixels around the lip bbox (CSS px)
+const COLORIZE_EVERY_N_FRAMES = 1;
+const MAX_BBOX_PAD = 8;
+
+/* -------------------------- LIP VISIBILITY GATING ------------------------ */
+const LIP_ON_FRAMES = 2;
+const LIP_OFF_FRAMES = 2;      // faster hide fallback
+const MIN_LIP_AREA_PCT = 0.0006;
+const MAX_LIP_AREA_PCT = 0.12;
+const MAX_LIP_ASPECT = 12;
+const STICKY_HOLD_FRAMES = 4;  // shorter grace window
+
+/* ------------------------- OCCLUSION HEURISTICS -------------------------- */
+// If any trigger, hide instantly.
+const AREA_EMA_ALPHA = 0.25;         // EMA smoothing for lip area
+const OCCL_AREA_DROP = 0.35;         // >35% area drop vs EMA => occlusion
+const OCCL_JITTER_THRESH = 0.03;     // centroid jump >3% of diag
+const OCCL_Z_STD_THRESH = 0.012;     // depth noise high
+// Hand overlap: if hand bbox overlaps >=10% of lip bbox area => occluded
+const HAND_OVERLAP_RATIO = 0.10;
+const HAND_BBOX_PAD_PX = 10;
 
 /* -------------------------- UTILITY: COLOR SPACE ------------------------- */
 function hexToRgb(hex) {
@@ -58,7 +75,6 @@ function hexToRgb(hex) {
     ? { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16), a: 255 }
     : { r: 200, g: 0, b: 0, a: 255 };
 }
-
 function rgbToHsl(r, g, b) {
   r /= 255; g /= 255; b /= 255;
   const max = Math.max(r, g, b), min = Math.min(r, g, b);
@@ -103,7 +119,6 @@ const LIP_LANDMARK_INDICES = new Set([
   ...UPPER_LIP_OUTER, ...LOWER_LIP_OUTER, ...UPPER_LIP_INNER, ...LOWER_LIP_INNER,
 ]);
 
-// Slightly smooth polygon points with Chaikin’s algorithm (keeps the silhouette organic)
 function smoothPolyline(points, iterations = 1) {
   let pts = points.slice();
   for (let k = 0; k < iterations; k++) {
@@ -141,25 +156,93 @@ function computeBBox(points) {
   }
   return { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
 }
+function rectFromPoints(points) {
+  const b = computeBBox(points);
+  return { x: b.x, y: b.y, w: b.w, h: b.h };
+}
+function rectPad(r, pad) {
+  return { x: r.x - pad, y: r.y - pad, w: r.w + pad * 2, h: r.h + pad * 2 };
+}
+function rectArea(r) { return Math.max(0, r.w) * Math.max(0, r.h); }
+function rectIntersectArea(a, b) {
+  const x1 = Math.max(a.x, b.x);
+  const y1 = Math.max(a.y, b.y);
+  const x2 = Math.min(a.x + a.w, b.x + b.w);
+  const y2 = Math.min(a.y + a.h, b.y + b.h);
+  const w = Math.max(0, x2 - x1);
+  const h = Math.max(0, y2 - y1);
+  return w * h;
+}
+
+/* ------------------------------ NEW HELPERS ------------------------------ */
+function polygonArea(points) {
+  let area = 0;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    area += (points[j].x * points[i].y) - (points[i].x * points[j].y);
+  }
+  return Math.abs(area) * 0.5;
+}
+function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+function lipsArePresent(outer_px, frameW, frameH) {
+  if (!outer_px || outer_px.length < 8) return false;
+
+  const bbox = computeBBox(outer_px);
+  if (bbox.w < 4 || bbox.h < 4) return false;
+
+  const bleed = 2;
+  const inFrame = bbox.x >= -bleed && bbox.y >= -bleed &&
+                  bbox.x + bbox.w <= frameW + bleed &&
+                  bbox.y + bbox.h <= frameH + bleed;
+  if (!inFrame) return false;
+
+  const aspect = Math.max(bbox.w / bbox.h, bbox.h / bbox.w);
+  if (aspect > MAX_LIP_ASPECT) return false;
+
+  const polyArea = polygonArea(outer_px);
+  const pct = polyArea / (frameW * frameH);
+  if (pct < MIN_LIP_AREA_PCT || pct > MAX_LIP_AREA_PCT) return false;
+
+  return true;
+}
+function computeCentroid(points) {
+  let sx = 0, sy = 0;
+  for (const p of points) { sx += p.x; sy += p.y; }
+  return { x: sx / points.length, y: sy / points.length };
+}
+function stddev(arr) {
+  if (!arr.length) return 0;
+  const m = arr.reduce((a, b) => a + b, 0) / arr.length;
+  const v = arr.reduce((a, b) => a + (b - m) ** 2, 0) / arr.length;
+  return Math.sqrt(v);
+}
 
 /* ------------------------------ COMPONENT -------------------------------- */
 export default function VirtualTryOn() {
   const videoRef = useRef(null);
-  const canvasRef = useRef(null); // FRONT buffer (visible)
-  const backCanvasRef = useRef(null); // BACK buffer (offscreen)
+  const canvasRef = useRef(null);
+  const backCanvasRef = useRef(null);
 
   const faceMeshRef = useRef(null);
+  const handsRef = useRef(null);
+
   const streamRef = useRef(null);
   const afRef = useRef(null);
-  const latestResultsRef = useRef(null);
-  const sendingRef = useRef(false); // <- prevent overlapping FaceMesh .send (flicker source)
+
+  const latestResultsRef = useRef(null);        // face landmarks
+  const latestHandsRef = useRef(null);          // hands landmarks
+
+  const sendingFaceRef = useRef(false);
+  const sendingHandsRef = useRef(false);
 
   const lastGoodLandmarksRef = useRef(null);
   const smoothedLandmarksRef = useRef(null);
   const frameCountRef = useRef(0);
 
-  const maskCanvasRef = useRef(null); // offscreen mask
-  const [scriptLoaded, setScriptLoaded] = useState(false);
+  const maskCanvasRef = useRef(null);
+  const [fmLoaded, setFmLoaded] = useState(false);
+  const [handsLoaded, setHandsLoaded] = useState(false);
+  const allLoaded = fmLoaded && handsLoaded;
+
   const [started, setStarted] = useState(false);
   const [selectedShade, setSelectedShade] = useState(LIPSTICK_SHADES[0]);
   const [error, setError] = useState("");
@@ -168,7 +251,16 @@ export default function VirtualTryOn() {
   const selectedColorRef = useRef(selectedShade.color);
   useEffect(() => { selectedColorRef.current = selectedShade.color; }, [selectedShade]);
 
-  // Lock scroll
+  const showMakeupRef = useRef(false);
+  const goodStreakRef = useRef(0);
+  const badStreakRef = useRef(0);
+  const holdFramesRef = useRef(0);
+
+  // Occlusion refs
+  const occlAreaEmaRef = useRef(null);
+  const occlCentroidEmaRef = useRef(null);
+  const occlStreakRef = useRef(0);
+
   useEffect(() => {
     const { style } = document.body;
     const prev = style.overflow;
@@ -176,23 +268,33 @@ export default function VirtualTryOn() {
     return () => { style.overflow = prev; };
   }, []);
 
-  // Load MediaPipe FaceMesh
+  // Load FaceMesh
   useEffect(() => {
     const script = document.createElement("script");
     script.src = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
     script.crossOrigin = "anonymous";
-    script.onload = () => setScriptLoaded(true);
+    script.onload = () => setFmLoaded(true);
     document.head.appendChild(script);
     return () => {
-      const scripts = Array.from(document.head.getElementsByTagName("script"));
-      const thisScript = scripts.find((s) => s.src === script.src);
-      if (thisScript) document.head.removeChild(thisScript);
+      if (script && script.parentNode) script.parentNode.removeChild(script);
     };
   }, []);
 
-  // Setup FaceMesh + lifecycle
+  // Load Hands
   useEffect(() => {
-    if (!scriptLoaded) return;
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js";
+    script.crossOrigin = "anonymous";
+    script.onload = () => setHandsLoaded(true);
+    document.head.appendChild(script);
+    return () => {
+      if (script && script.parentNode) script.parentNode.removeChild(script);
+    };
+  }, []);
+
+  // Init FaceMesh when loaded
+  useEffect(() => {
+    if (!fmLoaded) return;
     const faceMesh = new window.FaceMesh({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
     });
@@ -201,7 +303,7 @@ export default function VirtualTryOn() {
       refineLandmarks: true,
       minDetectionConfidence: 0.6,
       minTrackingConfidence: 0.6,
-      selfieMode: false, // keep coords unmirrored; we mirror draw only
+      selfieMode: false,
     });
     faceMesh.onResults((results) => {
       latestResultsRef.current = results;
@@ -210,19 +312,35 @@ export default function VirtualTryOn() {
       }
     });
     faceMeshRef.current = faceMesh;
+    return () => faceMeshRef.current?.close?.();
+  }, [fmLoaded]);
 
-    const onVis = () => {
-      if (document.hidden) stopCamera();
-    };
+  // Init Hands when loaded
+  useEffect(() => {
+    if (!handsLoaded) return;
+    const hands = new window.Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
+    });
+    hands.setOptions({
+      maxNumHands: 2,
+      modelComplexity: 0,
+      minDetectionConfidence: 0.6,
+      minTrackingConfidence: 0.6,
+      selfieMode: false,
+    });
+    hands.onResults((results) => {
+      latestHandsRef.current = results;
+    });
+    handsRef.current = hands;
+    return () => handsRef.current?.close?.();
+  }, [handsLoaded]);
+
+  useEffect(() => {
+    const onVis = () => { if (document.hidden) stopCamera(); };
     document.addEventListener("visibilitychange", onVis);
-    return () => {
-      document.removeEventListener("visibilitychange", onVis);
-      stopCamera();
-      faceMeshRef.current?.close?.();
-    };
-  }, [scriptLoaded]);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, []);
 
-  /* ------------------------------- CAMERA -------------------------------- */
   function stopCamera() {
     if (afRef.current) {
       if ("cancelVideoFrameCallback" in HTMLVideoElement.prototype && videoRef.current?.cancelVideoFrameCallback) {
@@ -237,11 +355,21 @@ export default function VirtualTryOn() {
       streamRef.current = null;
     }
     smoothedLandmarksRef.current = null;
+
+    showMakeupRef.current = false;
+    goodStreakRef.current = 0;
+    badStreakRef.current = LIP_OFF_FRAMES;
+    holdFramesRef.current = 0;
+
+    // Reset occlusion state
+    occlAreaEmaRef.current = null;
+    occlCentroidEmaRef.current = null;
+    occlStreakRef.current = 0;
   }
 
   async function startCamera() {
-    if (!scriptLoaded) {
-      setError("Resources are still loading, please try again in a moment.");
+    if (!allLoaded) {
+      setError("Models are loading—try again in a moment.");
       return;
     }
     setError("");
@@ -292,21 +420,17 @@ export default function VirtualTryOn() {
     canvas.width = Math.max(2, Math.floor(w * DPR));
     canvas.height = Math.max(2, Math.floor(h * DPR));
 
-    // FRONT buffer context—avoid desynchronized for consistency (prevents tearing)
     const ctx = canvas.getContext("2d", { alpha: true });
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
 
-    // BACK buffer canvas (device pixels)
     if (!backCanvasRef.current) backCanvasRef.current = document.createElement("canvas");
     backCanvasRef.current.width = canvas.width;
     backCanvasRef.current.height = canvas.height;
 
-    // Offscreen mask canvas (device pixels)
     if (!maskCanvasRef.current) maskCanvasRef.current = document.createElement("canvas");
   }
 
-  /* ------------------------------ PROCESSING ----------------------------- */
   function startProcessing() {
     const video = videoRef.current;
     const frontCanvas = canvasRef.current;
@@ -316,35 +440,39 @@ export default function VirtualTryOn() {
     const DPR = Math.min(window.devicePixelRatio || 1, DPR_LIMIT);
 
     const step = async () => {
-      if (!video || !faceMeshRef.current) return;
+      if (!video || !faceMeshRef.current || !handsRef.current) return;
 
-      // Pace FaceMesh: never allow overlapping .send() (this causes flicker/jank)
-      if (video.readyState >= 2 && !sendingRef.current) {
+      if (video.readyState >= 2 && !sendingFaceRef.current) {
         try {
-          sendingRef.current = true;
+          sendingFaceRef.current = true;
           await faceMeshRef.current.send({ image: video });
         } finally {
-          sendingRef.current = false;
+          sendingFaceRef.current = false;
+        }
+      }
+      if (video.readyState >= 2 && !sendingHandsRef.current) {
+        try {
+          sendingHandsRef.current = true;
+          await handsRef.current.send({ image: video });
+        } finally {
+          sendingHandsRef.current = false;
         }
       }
 
-      // Draw everything to BACK buffer first (atomic compose), then blit to FRONT
       const w = frontCanvas.width / DPR;
       const h = frontCanvas.height / DPR;
 
-      // reset and mirror video on back buffer
       backCtx.setTransform(1, 0, 0, 1, 0, 0);
       backCtx.clearRect(0, 0, backCanvas.width, backCanvas.height);
-      backCtx.setTransform(-DPR, 0, 0, DPR, backCanvas.width, 0); // mirror at retina scale
+      // Mirror draw to match getLipPointsPx()
+      backCtx.setTransform(-DPR, 0, 0, DPR, backCanvas.width, 0);
       backCtx.drawImage(video, 0, 0, w, h);
 
-      // Landmarks — reset smoothing when tracking reacquires
       const raw = latestResultsRef.current?.multiFaceLandmarks?.[0] || null;
       if (raw) {
         if (!smoothedLandmarksRef.current) {
           smoothedLandmarksRef.current = raw.map((p) => ({ x: p.x, y: p.y, z: p.z || 0 }));
         } else {
-          // velocity-aware EMA
           for (let i = 0; i < raw.length; i++) {
             const s = smoothedLandmarksRef.current[i];
             const c = raw[i];
@@ -361,12 +489,11 @@ export default function VirtualTryOn() {
           }
         }
       } else {
-        smoothedLandmarksRef.current = null; // guarantees no drift after lost tracking
+        smoothedLandmarksRef.current = null;
       }
 
       const drawLm = smoothedLandmarksRef.current || lastGoodLandmarksRef.current;
       if (drawLm) {
-        // 1) Build path for visual anti-aliased fill (on mirrored context)
         const outerU = getLipPoints(drawLm, UPPER_LIP_OUTER, w, h);
         const outerL = getLipPoints(drawLm, LOWER_LIP_OUTER, w, h);
         const innerU = getLipPoints(drawLm, UPPER_LIP_INNER, w, h);
@@ -375,7 +502,82 @@ export default function VirtualTryOn() {
         const outerRing = smoothPolyline([...outerU, ...outerL.slice().reverse()], 1);
         const innerRing = smoothPolyline([...innerU, ...innerL.slice().reverse()], 1);
 
-        if (selectedColorRef.current !== "transparent") {
+        const outerU_px = getLipPointsPx(drawLm, UPPER_LIP_OUTER, w, h);
+        const outerL_px = getLipPointsPx(drawLm, LOWER_LIP_OUTER, w, h);
+        const innerU_px = getLipPointsPx(drawLm, UPPER_LIP_INNER, w, h);
+        const innerL_px = getLipPointsPx(drawLm, LOWER_LIP_INNER, w, h);
+
+        const outer_px = smoothPolyline([...outerU_px, ...outerL_px.slice().reverse()], 1);
+        const inner_px = smoothPolyline([...innerU_px, ...innerL_px.slice().reverse()], 1);
+
+        const hasRaw = !!latestResultsRef.current?.multiFaceLandmarks?.[0];
+        const lipsVisibleNow = hasRaw && lipsArePresent(outer_px, w, h);
+
+        // Hand bboxes (mirrored to match video draw)
+        const handBoxes = getHandBBoxesMirrored(latestHandsRef.current, w, h, HAND_BBOX_PAD_PX);
+        const lipRect = rectFromPoints(outer_px);
+        const lipArea = rectArea(lipRect);
+        const handOverlapNow = handBoxes.some((hb) => {
+          const ia = rectIntersectArea(hb, lipRect);
+          return ia >= lipArea * HAND_OVERLAP_RATIO;
+        });
+
+        // -------------------- OCCLUSION DETECTION --------------------
+        // 1) Area drop vs EMA
+        const outerArea = polygonArea(outer_px); // px^2
+        if (occlAreaEmaRef.current == null) occlAreaEmaRef.current = outerArea;
+        occlAreaEmaRef.current =
+          occlAreaEmaRef.current * (1 - AREA_EMA_ALPHA) + outerArea * AREA_EMA_ALPHA;
+        const areaDrop = outerArea < occlAreaEmaRef.current * (1 - OCCL_AREA_DROP);
+
+        // 2) Centroid jitter
+        const cNow = computeCentroid(outer_px);
+        const diag = Math.hypot(w, h);
+        if (occlCentroidEmaRef.current == null) occlCentroidEmaRef.current = { ...cNow };
+        occlCentroidEmaRef.current.x += (cNow.x - occlCentroidEmaRef.current.x) * 0.25;
+        occlCentroidEmaRef.current.y += (cNow.y - occlCentroidEmaRef.current.y) * 0.25;
+        const jitter =
+          Math.hypot(cNow.x - occlCentroidEmaRef.current.x, cNow.y - occlCentroidEmaRef.current.y) / diag;
+        const jitterSpike = jitter > OCCL_JITTER_THRESH;
+
+        // 3) Depth noise
+        const lipZ = Array.from(LIP_LANDMARK_INDICES).map((i) => (drawLm[i].z || 0));
+        const zStd = stddev(lipZ);
+        const zNoisy = zStd > OCCL_Z_STD_THRESH;
+
+        const occludedNow = hasRaw && (handOverlapNow || areaDrop || jitterSpike || zNoisy);
+        if (occludedNow || !lipsVisibleNow) occlStreakRef.current++;
+        else occlStreakRef.current = 0;
+
+        // Hand-over-mouth OR any occlusion signal => one-frame instant hide
+        const HARD_OCCLUSION = handOverlapNow || occlStreakRef.current >= 1;
+        // -------------------------------------------------------------
+
+        if (lipsVisibleNow && !HARD_OCCLUSION) {
+          goodStreakRef.current = Math.min(LIP_ON_FRAMES, goodStreakRef.current + 1);
+          badStreakRef.current = 0;
+          holdFramesRef.current = STICKY_HOLD_FRAMES; // only when not occluded
+        } else {
+          badStreakRef.current = Math.min(LIP_OFF_FRAMES, badStreakRef.current + 1);
+          goodStreakRef.current = 0;
+          if (holdFramesRef.current > 0) holdFramesRef.current--;
+        }
+
+        if (HARD_OCCLUSION) {
+          holdFramesRef.current = 0;
+          showMakeupRef.current = false; // INSTANT HIDE
+        }
+
+        const gatedVisible = (lipsVisibleNow && !HARD_OCCLUSION) || holdFramesRef.current > 0;
+
+        if (!showMakeupRef.current && gatedVisible && goodStreakRef.current >= LIP_ON_FRAMES) {
+          showMakeupRef.current = true;
+        }
+        if (showMakeupRef.current && !gatedVisible && badStreakRef.current >= LIP_OFF_FRAMES) {
+          showMakeupRef.current = false;
+        }
+
+        if (selectedColorRef.current !== "transparent" && showMakeupRef.current) {
           const path = makePathFromRings(outerRing, innerRing);
           backCtx.globalCompositeOperation = "multiply";
           backCtx.globalAlpha = 0.28;
@@ -386,18 +588,8 @@ export default function VirtualTryOn() {
           backCtx.globalCompositeOperation = "source-over";
         }
 
-        // 2) Premium colorization (per-pixel) within a tight bbox in *unmirrored* space
-        if (selectedColorRef.current !== "transparent") {
+        if (selectedColorRef.current !== "transparent" && showMakeupRef.current) {
           if (frameCountRef.current % COLORIZE_EVERY_N_FRAMES === 0) {
-            // Build points in canvas pixel space WITHOUT the mirror transform:
-            const outerU_px = getLipPointsPx(drawLm, UPPER_LIP_OUTER, w, h);
-            const outerL_px = getLipPointsPx(drawLm, LOWER_LIP_OUTER, w, h);
-            const innerU_px = getLipPointsPx(drawLm, UPPER_LIP_INNER, w, h);
-            const innerL_px = getLipPointsPx(drawLm, LOWER_LIP_INNER, w, h);
-
-            const outer_px = smoothPolyline([...outerU_px, ...outerL_px.slice().reverse()], 1);
-            const inner_px = smoothPolyline([...innerU_px, ...innerL_px.slice().reverse()], 1);
-
             const bbox = computeBBox(outer_px);
             const pad = Math.min(MAX_BBOX_PAD, Math.max(2, Math.round(Math.max(bbox.w, bbox.h) * 0.04)));
             const bx = Math.max(0, Math.floor(bbox.x - pad));
@@ -409,7 +601,6 @@ export default function VirtualTryOn() {
             const sw = Math.max(1, Math.floor(bw * DPR)), sh = Math.max(1, Math.floor(bh * DPR));
             const frame = backCtx.getImageData(sx, sy, sw, sh);
 
-            // Build feathered lip mask in device pixels (aligned to the bbox)
             const mCanvas = maskCanvasRef.current;
             mCanvas.width = sw; mCanvas.height = sh;
             const mctx = mCanvas.getContext("2d");
@@ -420,7 +611,7 @@ export default function VirtualTryOn() {
             const outerD = outer_px.map(toDevice);
             const innerD = inner_px.map(toDevice);
             const maskPath = makePathFromRings(outerD, innerD);
-            mctx.filter = `blur(${EDGE_FEATHER_PX * DPR}px)`; // feather for realism
+            mctx.filter = `blur(${EDGE_FEATHER_PX * DPR}px)`;
             mctx.fillStyle = "#fff";
             mctx.fill(maskPath, "evenodd");
             mctx.restore();
@@ -431,21 +622,16 @@ export default function VirtualTryOn() {
             const data = frame.data;
             const mdata = mask.data;
             for (let i = 0; i < data.length; i += 4) {
-              const ma = mdata[i + 3] / 255; // mask alpha
+              const ma = mdata[i + 3] / 255;
               if (ma < 0.01) continue;
-
               const r = data[i], g = data[i + 1], b = data[i + 2];
               const { l } = rgbToHsl(r, g, b);
-
-              const a = Math.min(1, Math.max(0, BASE_OPACITY + SHADOW_BOOST * (0.5 - l))) * ma;
-
+              const a = clamp01(BASE_OPACITY + SHADOW_BOOST * (0.5 - l)) * ma;
               const nrgb = hslToRgb(thsl.h, thsl.s, l);
               data[i]   = Math.round(nrgb.r * a + r * (1 - a));
               data[i+1] = Math.round(nrgb.g * a + g * (1 - a));
               data[i+2] = Math.round(nrgb.b * a + b * (1 - a));
             }
-
-            // Write back to BACK buffer using identity transform
             backCtx.setTransform(1, 0, 0, 1, 0, 0);
             backCtx.putImageData(frame, sx, sy);
           }
@@ -453,12 +639,10 @@ export default function VirtualTryOn() {
         }
       }
 
-      // Atomic present: blit BACK -> FRONT (no transforms on FRONT)
       frontCtx.setTransform(1, 0, 0, 1, 0, 0);
       frontCtx.clearRect(0, 0, frontCanvas.width, frontCanvas.height);
       frontCtx.drawImage(backCanvas, 0, 0);
 
-      // Schedule next frame
       if ("requestVideoFrameCallback" in HTMLVideoElement.prototype && videoRef.current?.requestVideoFrameCallback) {
         afRef.current = videoRef.current.requestVideoFrameCallback(() => step());
       } else {
@@ -466,19 +650,35 @@ export default function VirtualTryOn() {
       }
     };
 
-    // Kick off
     step();
   }
 
-  /* ------------------------------- HELPERS -------------------------------- */
   function getLipPoints(landmarks, indices, w, h) {
-    // points for drawing on the mirrored context (we draw after mirroring)
     return indices.map((i) => ({ x: landmarks[i].x * w, y: landmarks[i].y * h }));
   }
   function getLipPointsPx(landmarks, indices, w, h) {
-    // points in canvas pixel space *without* mirroring (for get/putImageData)
-    // because we draw video mirrored, we must mirror x to match the drawn pixels
+    // Mirror X to align with mirrored video draw
     return indices.map((i) => ({ x: (w - landmarks[i].x * w), y: landmarks[i].y * h }));
+  }
+
+  // Build hand bboxes in mirrored pixel space (to match getLipPointsPx & draw)
+  function getHandBBoxesMirrored(handsResults, w, h, padPx = 0) {
+    const boxes = [];
+    if (!handsResults || !handsResults.multiHandLandmarks) return boxes;
+    for (const lmArr of handsResults.multiHandLandmarks) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const lm of lmArr) {
+        const x = w - (lm.x * w); // MIRROR
+        const y = lm.y * h;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+      }
+      const r = { x: minX, y: minY, w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
+      boxes.push(rectPad(r, padPx));
+    }
+    return boxes;
   }
 
   function takeSnapshot() {
@@ -494,14 +694,12 @@ export default function VirtualTryOn() {
     }
   }
 
-  /* --------------------------------- UI ----------------------------------- */
   return (
     <div className="fixed inset-0 bg-gray-900 font-sans flex items-center justify-center">
       <div className="relative w-full h-full bg-black flex items-center justify-center">
         <video ref={videoRef} className="hidden" playsInline muted />
         <canvas ref={canvasRef} className="max-w-full max-h-full object-cover rounded-lg" />
 
-        {/* Snapshot overlay */}
         {snapshot && (
           <div className="absolute inset-0 bg-black/80 z-30 flex flex-col items-center justify-center p-4">
             <img
@@ -527,7 +725,6 @@ export default function VirtualTryOn() {
           </div>
         )}
 
-        {/* Start overlay */}
         {!started && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-20 p-4">
             <button
@@ -539,7 +736,6 @@ export default function VirtualTryOn() {
           </div>
         )}
 
-        {/* Error overlay */}
         {error && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/70 p-4 z-20">
             <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 sm:px-6 sm:py-4 rounded-xl text-center w-11/12 max-w-md">
@@ -549,7 +745,6 @@ export default function VirtualTryOn() {
           </div>
         )}
 
-        {/* Controls */}
         {started && !snapshot && (
           <div className="absolute bottom-0 left-0 right-0 p-4 sm:p-6 bg-black/30 z-10">
             <div className="max-w-6xl mx-auto flex flex-col items-center gap-4 md:gap-5">
