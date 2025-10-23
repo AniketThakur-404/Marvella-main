@@ -52,18 +52,20 @@ const MAX_BBOX_PAD = 8;
 /* -------------------------- LIP VISIBILITY GATING ------------------------ */
 const LIP_ON_FRAMES = 2;
 const LIP_OFF_FRAMES = 2;      // faster hide fallback
-const MIN_LIP_AREA_PCT = 0.0006;
+const MIN_LIP_AREA_PCT = 0.0004;
 const MAX_LIP_AREA_PCT = 0.12;
-const MAX_LIP_ASPECT = 12;
-const STICKY_HOLD_FRAMES = 4;  // shorter grace window
+const MAX_LIP_ASPECT = 16;
+const STICKY_HOLD_FRAMES = 10;  // shorter grace window
 
 /* ------------------------- OCCLUSION HEURISTICS -------------------------- */
-// If any trigger, hide instantly.
-const AREA_EMA_ALPHA = 0.25;         // EMA smoothing for lip area
-const OCCL_AREA_DROP = 0.35;         // >35% area drop vs EMA => occlusion
-const OCCL_JITTER_THRESH = 0.03;     // centroid jump >3% of diag
-const OCCL_Z_STD_THRESH = 0.012;     // depth noise high
-// Hand overlap: if hand bbox overlaps >=10% of lip bbox area => occluded
+// If any trigger, hide only after a short sustain window (avoids head-move flicker)
+const AREA_EMA_ALPHA = 0.18;         // EMA smoothing for lip area (slower = less false occlusion)
+const OCCL_AREA_DROP = 0.55;         // require >55% area drop vs EMA => possible occlusion
+const OCCL_JITTER_THRESH = 0.05;     // centroid jump >5% of diag
+const OCCL_Z_STD_THRESH = 0.02;      // depth noise high
+const OCCL_MIN_FRAMES = 3;           // require N consecutive frames before hiding (non-hand occlusion)
+const HEAD_VEL_THRESH = 0.03;        // if lips centroid moving >3% diag, forgive transient area/jitter spikes
+// Hand overlap: if hand bbox overlaps >=10% of lip bbox area => occluded (instant hide)
 const HAND_OVERLAP_RATIO = 0.10;
 const HAND_BBOX_PAD_PX = 10;
 
@@ -296,6 +298,7 @@ export default function VirtualTryOn() {
   // Occlusion refs
   const occlAreaEmaRef = useRef(null);
   const occlCentroidEmaRef = useRef(null);
+  const occlPrevCentroidRef = useRef(null);
   const occlStreakRef = useRef(0);
 
   useEffect(() => {
@@ -417,7 +420,7 @@ export default function VirtualTryOn() {
       setError("Camera not supported in this browser. Try Chrome/Edge on Android or Safari 15+ on iOS.");
       return;
     }
-    if (!allLoaded) {
+    if (!allLoaded || !window.FaceMesh || !window.Hands) {
       setError("Models are loading—please try again in a moment.");
       return;
     }
@@ -505,7 +508,34 @@ export default function VirtualTryOn() {
     const DPR = Math.min(window.devicePixelRatio || 1, DPR_LIMIT);
 
     const step = async () => {
-      if (!video || !faceMeshRef.current || !handsRef.current) return;
+      if (!video) {
+        // No video element yet; try again next frame.
+        if ("requestVideoFrameCallback" in HTMLVideoElement.prototype && videoRef.current?.requestVideoFrameCallback) {
+          afRef.current = videoRef.current.requestVideoFrameCallback(() => step());
+        } else {
+          afRef.current = requestAnimationFrame(step);
+        }
+        return;
+      }
+
+      // If models aren't ready yet, still show the live camera feed so it's not just black.
+      if (!faceMeshRef.current || !handsRef.current) {
+        const w = frontCanvas.width / DPR;
+        const h = frontCanvas.height / DPR;
+        backCtx.setTransform(1, 0, 0, 1, 0, 0);
+        backCtx.clearRect(0, 0, backCanvas.width, backCanvas.height);
+        backCtx.setTransform(-DPR, 0, 0, DPR, backCanvas.width, 0);
+        if (video.readyState >= 2) backCtx.drawImage(video, 0, 0, w, h);
+        frontCtx.setTransform(1, 0, 0, 1, 0, 0);
+        frontCtx.clearRect(0, 0, frontCanvas.width, frontCanvas.height);
+        frontCtx.drawImage(backCanvas, 0, 0);
+        if ("requestVideoFrameCallback" in HTMLVideoElement.prototype && videoRef.current?.requestVideoFrameCallback) {
+          afRef.current = videoRef.current.requestVideoFrameCallback(() => step());
+        } else {
+          afRef.current = requestAnimationFrame(step);
+        }
+        return;
+      }
 
       if (video.readyState >= 2 && !sendingFaceRef.current) {
         try { sendingFaceRef.current = true; await faceMeshRef.current.send({ image: video }); }
@@ -583,31 +613,36 @@ export default function VirtualTryOn() {
         // 1) Area drop vs EMA
         const outerArea = polygonArea(outer_px); // px^2
         if (occlAreaEmaRef.current == null) occlAreaEmaRef.current = outerArea;
-        occlAreaEmaRef.current =
-          occlAreaEmaRef.current * (1 - AREA_EMA_ALPHA) + outerArea * AREA_EMA_ALPHA;
+        occlAreaEmaRef.current = occlAreaEmaRef.current * (1 - AREA_EMA_ALPHA) + outerArea * AREA_EMA_ALPHA;
         const areaDrop = outerArea < occlAreaEmaRef.current * (1 - OCCL_AREA_DROP);
 
-        // 2) Centroid jitter
+        // 2) Centroid jitter & head velocity
         const cNow = computeCentroid(outer_px);
         const diag = Math.hypot(w, h);
+        const prevC = occlPrevCentroidRef.current || cNow;
+        const headVel = Math.hypot(cNow.x - prevC.x, cNow.y - prevC.y) / diag;
+        occlPrevCentroidRef.current = cNow;
+
         if (occlCentroidEmaRef.current == null) occlCentroidEmaRef.current = { ...cNow };
         occlCentroidEmaRef.current.x += (cNow.x - occlCentroidEmaRef.current.x) * 0.25;
         occlCentroidEmaRef.current.y += (cNow.y - occlCentroidEmaRef.current.y) * 0.25;
-        const jitter =
-          Math.hypot(cNow.x - occlCentroidEmaRef.current.x, cNow.y - occlCentroidEmaRef.current.y) / diag;
+        const jitter = Math.hypot(cNow.x - occlCentroidEmaRef.current.x, cNow.y - occlCentroidEmaRef.current.y) / diag;
         const jitterSpike = jitter > OCCL_JITTER_THRESH;
+        const fastHeadMove = headVel > HEAD_VEL_THRESH;
 
         // 3) Depth noise
         const lipZ = Array.from(LIP_LANDMARK_INDICES).map((i) => (drawLm[i].z || 0));
         const zStd = stddev(lipZ);
         const zNoisy = zStd > OCCL_Z_STD_THRESH;
 
-        const occludedNow = hasRaw && (handOverlapNow || areaDrop || jitterSpike || zNoisy);
-        if (occludedNow || !lipsVisibleNow) occlStreakRef.current++;
+        // Combine: forgive area/jitter spikes during fast head movements
+        const softOcclusionNow = (areaDrop && !fastHeadMove) || (jitterSpike && !fastHeadMove) || zNoisy;
+
+        if (hasRaw && (handOverlapNow || softOcclusionNow)) occlStreakRef.current++;
         else occlStreakRef.current = 0;
 
-        // Hand-over-mouth OR any occlusion signal => one-frame instant hide
-        const HARD_OCCLUSION = handOverlapNow || occlStreakRef.current >= 1;
+        // Hand-over-mouth => instant hide. Other occlusion signals require sustain.
+        const HARD_OCCLUSION = handOverlapNow || occlStreakRef.current >= OCCL_MIN_FRAMES;
         // -------------------------------------------------------------
 
         if (lipsVisibleNow && !HARD_OCCLUSION) {
