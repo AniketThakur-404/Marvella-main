@@ -40,13 +40,14 @@ const MAX_LIP_SMOOTHING = 0.92;
 const POSITION_SNAP_THRESHOLD = 0.006;
 
 // Visuals
+const EDGE_FEATHER_PX = 0.9;
 const BASE_OPACITY = 0.84;
 const SHADOW_BOOST = 0.20;
 const DPR_LIMIT = 2;
 
 // Performance
 const COLORIZE_EVERY_N_FRAMES = 1;
-const MAX_BBOX_PAD = 12; // sampling window
+const MAX_BBOX_PAD = 8;
 
 /* -------------------------- LIP VISIBILITY GATING ------------------------ */
 const LIP_ON_FRAMES = 2;
@@ -54,7 +55,7 @@ const LIP_OFF_FRAMES = 2;      // faster hide fallback
 const MIN_LIP_AREA_PCT = 0.00015;
 const MAX_LIP_AREA_PCT = 0.12;
 const MAX_LIP_ASPECT = 28;
-const STICKY_HOLD_FRAMES = 16;  // grace window
+const STICKY_HOLD_FRAMES = 16;  // shorter grace window
 
 /* ------------------------- OCCLUSION HEURISTICS -------------------------- */
 // If any trigger, hide only after a short sustain window (avoids head-move flicker)
@@ -63,39 +64,20 @@ const OCCL_AREA_DROP = 0.55;         // require >55% area drop vs EMA => possibl
 const OCCL_JITTER_THRESH = 0.05;     // centroid jump >5% of diag
 const OCCL_Z_STD_THRESH = 0.02;      // depth noise high
 const OCCL_MIN_FRAMES = 3;           // require N consecutive frames before hiding (non-hand occlusion)
-const HEAD_VEL_THRESH = 0.03;        // if lips centroid moving >3% diag, forgive transient spikes
+const HEAD_VEL_THRESH = 0.03;        // if lips centroid moving >3% diag, forgive transient area/jitter spikes
 // Hand overlap: if hand bbox overlaps >=10% of lip bbox area => occluded (instant hide)
 const HAND_OVERLAP_RATIO = 0.10;
 const HAND_BBOX_PAD_PX = 10;
 // Feature flag: hide only when a hand overlaps the lips
 const ONLY_HIDE_ON_HAND = true;      // set to false to re-enable soft occlusion
 
-/* -------------------------- AUTO-FIT MASK SETTINGS ----------------------- */
-// Auto fits the lipstick polygon to each user's lip size and fullness
-const AUTO_FIT_MASK = true;          // master toggle
-const ADAPT_THIN_START = 0.20;       // h/w ratio below this => expand progressively
-const ADAPT_THICK_START = 0.34;      // h/w ratio above this => contract progressively
-const MAX_EXPAND_PCT = 0.08;         // slightly reduced to avoid overgrowth
-const MAX_CONTRACT_PCT = -0.05;      // slightly reduced contraction
-const ANTI_ALIAS_PIX = 0.5;          // small always-on inflation to fight aliasing
-
-/* -------------------------- ANTI–FLICKER SETTINGS ------------------------ */
-// Remove the separate overlay pass and rely on a single, masked recolor pass
-const USE_OVERLAY_PASS = false;
-// Smooth the mask shape over time to kill shimmer at edges
-const MASK_EASE_ALPHA = 0.55;        // 0..1. Higher = snappier, lower = steadier
-// Smooth feather size so it doesn't pump frame-to-frame
-const FEATHER_EMA_ALPHA = 0.20;      // 0..1. Higher = follow changes faster
-
 /* -------------------------- UTILITY: COLOR SPACE ------------------------- */
 function hexToRgb(hex) {
   if (hex === "transparent") return { r: 0, g: 0, b: 0, a: 0 };
-  let h = hex.trim().replace(/^#/, "");
-  if (h.length === 3) h = h.split("").map((c) => c + c).join("");
-  const r = parseInt(h.slice(0, 2), 16);
-  const g = parseInt(h.slice(2, 4), 16);
-  const b = parseInt(h.slice(4, 6), 16);
-  return { r: isNaN(r) ? 200 : r, g: isNaN(g) ? 0 : g, b: isNaN(b) ? 0 : b, a: 255 };
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+  return m
+    ? { r: parseInt(m[1], 16), g: parseInt(m[2], 16), b: parseInt(m[3], 16), a: 255 }
+    : { r: 200, g: 0, b: 0, a: 255 };
 }
 function rgbToHsl(r, g, b) {
   r /= 255; g /= 255; b /= 255;
@@ -204,15 +186,28 @@ function polygonArea(points) {
   }
   return Math.abs(area) * 0.5;
 }
-function polygonSignedArea(points) {
-  let s = 0;
-  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
-    s += (points[j].x * points[i].y) - (points[i].x * points[j].y);
-  }
-  return s * 0.5; // positive => CCW
-}
 function clamp01(x) { return Math.max(0, Math.min(1, x)); }
+function lipsArePresent(outer_px, frameW, frameH) {
+  if (!outer_px || outer_px.length < 8) return false;
 
+  const bbox = computeBBox(outer_px);
+  if (bbox.w < 4 || bbox.h < 4) return false;
+
+  const bleed = 2;
+  const inFrame = bbox.x >= -bleed && bbox.y >= -bleed &&
+                  bbox.x + bbox.w <= frameW + bleed &&
+                  bbox.y + bbox.h <= frameH + bleed;
+  if (!inFrame) return false;
+
+  const aspect = Math.max(bbox.w / bbox.h, bbox.h / bbox.w);
+  if (aspect > MAX_LIP_ASPECT) return false;
+
+  const polyArea = polygonArea(outer_px);
+  const pct = polyArea / (frameW * frameH);
+  if (pct < MIN_LIP_AREA_PCT || pct > MAX_LIP_AREA_PCT) return false;
+
+  return true;
+}
 function computeCentroid(points) {
   let sx = 0, sy = 0;
   for (const p of points) { sx += p.x; sy += p.y; }
@@ -223,73 +218,6 @@ function stddev(arr) {
   const m = arr.reduce((a, b) => a + b, 0) / arr.length;
   const v = arr.reduce((a, b) => a + (b - m) ** 2, 0) / arr.length;
   return Math.sqrt(v);
-}
-
-// Compute outward vertex normals for a closed polygon
-function computeVertexNormals(pts) {
-  const n = pts.length;
-  const out = new Array(n);
-  const ccw = polygonSignedArea(pts) > 0; // orientation
-  for (let i = 0; i < n; i++) {
-    const pPrev = pts[(i - 1 + n) % n];
-    const p = pts[i];
-    const pNext = pts[(i + 1) % n];
-
-    const e1x = p.x - pPrev.x, e1y = p.y - pPrev.y;
-    const e2x = pNext.x - p.x, e2y = pNext.y - p.y;
-
-    // Outward normals per edge
-    const n1x = ccw ? e1y : -e1y;
-    const n1y = ccw ? -e1x : e1x;
-    const n2x = ccw ? e2y : -e2y;
-    const n2y = ccw ? -e2x : e2x;
-
-    // Normalize
-    const len1 = Math.hypot(n1x, n1y) || 1;
-    const len2 = Math.hypot(n2x, n2y) || 1;
-
-    let nx = n1x / len1 + n2x / len2;
-    let ny = n1y / len1 + n2y / len2;
-    const len = Math.hypot(nx, ny);
-    if (len < 1e-6) {
-      // fallback: radial from centroid
-      const c = computeCentroid(pts);
-      nx = (p.x - c.x);
-      ny = (p.y - c.y);
-    }
-    const ln = Math.hypot(nx, ny) || 1;
-    out[i] = { x: nx / ln, y: ny / ln };
-  }
-  return out;
-}
-
-function offsetClosedPolygon(pts, amount) {
-  if (!amount) return pts.slice();
-  const normals = computeVertexNormals(pts);
-  return pts.map((p, i) => ({ x: p.x + normals[i].x * amount, y: p.y + normals[i].y * amount }));
-}
-
-function adaptivePctFromBBox(w, h) {
-  const maxDim = Math.max(w, h);
-  if (maxDim <= 0) return 0;
-  const ttw = h / w; // thickness to width
-
-  let pct = 0;
-  if (ttw < ADAPT_THIN_START) {
-    pct += (ADAPT_THIN_START - ttw) * 0.35; // expand more for very thin lips
-  } else if (ttw > ADAPT_THICK_START) {
-    pct -= (ttw - ADAPT_THICK_START) * 0.40; // contract for very thick lips
-  }
-  pct = Math.max(MAX_CONTRACT_PCT, Math.min(MAX_EXPAND_PCT, pct));
-  // add ~0.5px of anti-alias inflation in percent
-  pct += ANTI_ALIAS_PIX / maxDim;
-  return pct;
-}
-
-// Temporal smoothing for polygon points
-function smoothTemporal(prev, curr, alpha) {
-  if (!prev || prev.length !== curr.length) return curr.slice();
-  return curr.map((p, i) => ({ x: prev[i].x * (1 - alpha) + p.x * alpha, y: prev[i].y * (1 - alpha) + p.y * alpha }));
 }
 
 /* ------------------------------ MOBILE HELPERS --------------------------- */
@@ -374,13 +302,6 @@ export default function VirtualTryOn() {
   const occlCentroidEmaRef = useRef(null);
   const occlPrevCentroidRef = useRef(null);
   const occlStreakRef = useRef(0);
-
-  // Anti-flicker refs
-  const prevOuterCssRef = useRef(null);
-  const prevInnerCssRef = useRef(null);
-  const prevOuterPxRef  = useRef(null);
-  const prevInnerPxRef  = useRef(null);
-  const edgeFeatherEmaRef = useRef(null);
 
   useEffect(() => {
     const { style } = document.body;
@@ -490,15 +411,7 @@ export default function VirtualTryOn() {
     // Reset occlusion state
     occlAreaEmaRef.current = null;
     occlCentroidEmaRef.current = null;
-    occlPrevCentroidRef.current = null;
     occlStreakRef.current = 0;
-
-    // Reset anti-flicker state
-    prevOuterCssRef.current = null;
-    prevInnerCssRef.current = null;
-    prevOuterPxRef.current  = null;
-    prevInnerPxRef.current  = null;
-    edgeFeatherEmaRef.current = null;
 
     window.removeEventListener("resize", setupCanvas);
     window.removeEventListener("orientationchange", setupCanvas);
@@ -675,23 +588,16 @@ export default function VirtualTryOn() {
         const innerU = getLipPoints(drawLm, UPPER_LIP_INNER, w, h);
         const innerL = getLipPoints(drawLm, LOWER_LIP_INNER, w, h);
 
-        // Keep exact shape (no smoothing shrink/expand)
-        let outerRing = smoothPolyline([...outerU, ...outerL.slice().reverse()], 0);
-        let innerRing = smoothPolyline([...innerU, ...innerL.slice().reverse()], 0);
+        const outerRing = smoothPolyline([...outerU, ...outerL.slice().reverse()], 1);
+        const innerRing = smoothPolyline([...innerU, ...innerL.slice().reverse()], 1);
 
-        let outerU_px = getLipPointsPx(drawLm, UPPER_LIP_OUTER, w, h);
-        let outerL_px = getLipPointsPx(drawLm, LOWER_LIP_OUTER, w, h);
-        let innerU_px = getLipPointsPx(drawLm, UPPER_LIP_INNER, w, h);
-        let innerL_px = getLipPointsPx(drawLm, LOWER_LIP_INNER, w, h);
+        const outerU_px = getLipPointsPx(drawLm, UPPER_LIP_OUTER, w, h);
+        const outerL_px = getLipPointsPx(drawLm, LOWER_LIP_OUTER, w, h);
+        const innerU_px = getLipPointsPx(drawLm, UPPER_LIP_INNER, w, h);
+        const innerL_px = getLipPointsPx(drawLm, LOWER_LIP_INNER, w, h);
 
-        let outer_px = smoothPolyline([...outerU_px, ...outerL_px.slice().reverse()], 0);
-        let inner_px = smoothPolyline([...innerU_px, ...innerL_px.slice().reverse()], 0);
-
-        // === Temporal smoothing of mask rings (anti-flicker) ===
-        outerRing = smoothTemporal(prevOuterCssRef.current, outerRing, MASK_EASE_ALPHA); prevOuterCssRef.current = outerRing.slice();
-        innerRing = smoothTemporal(prevInnerCssRef.current, innerRing, MASK_EASE_ALPHA); prevInnerCssRef.current = innerRing.slice();
-        outer_px  = smoothTemporal(prevOuterPxRef.current,  outer_px,  MASK_EASE_ALPHA); prevOuterPxRef.current  = outer_px.slice();
-        inner_px  = smoothTemporal(prevInnerPxRef.current,  inner_px,  MASK_EASE_ALPHA); prevInnerPxRef.current  = inner_px.slice();
+        const outer_px = smoothPolyline([...outerU_px, ...outerL_px.slice().reverse()], 1);
+        const inner_px = smoothPolyline([...innerU_px, ...innerL_px.slice().reverse()], 1);
 
         const hasRaw = !!latestResultsRef.current?.multiFaceLandmarks?.[0];
         const lipsVisibleNow = hasRaw && lipsArePresent(outer_px, w, h);
@@ -700,14 +606,19 @@ export default function VirtualTryOn() {
         const handBoxes = getHandBBoxesMirrored(latestHandsRef.current, w, h, HAND_BBOX_PAD_PX);
         const lipRect = rectFromPoints(outer_px);
         const lipArea = rectArea(lipRect);
-        const handOverlapNow = handBoxes.some((hb) => rectIntersectArea(hb, lipRect) >= lipArea * HAND_OVERLAP_RATIO);
+        const handOverlapNow = handBoxes.some((hb) => {
+          const ia = rectIntersectArea(hb, lipRect);
+          return ia >= lipArea * HAND_OVERLAP_RATIO;
+        });
 
         // -------------------- OCCLUSION DETECTION --------------------
+        // 1) Area drop vs EMA
         const outerArea = polygonArea(outer_px);
         if (occlAreaEmaRef.current == null) occlAreaEmaRef.current = outerArea;
         occlAreaEmaRef.current = occlAreaEmaRef.current * (1 - AREA_EMA_ALPHA) + outerArea * AREA_EMA_ALPHA;
         const areaDrop = outerArea < occlAreaEmaRef.current * (1 - OCCL_AREA_DROP);
 
+        // 2) Centroid jitter & head velocity
         const cNow = computeCentroid(outer_px);
         const diag = Math.hypot(w, h);
         if (occlCentroidEmaRef.current == null) occlCentroidEmaRef.current = { ...cNow };
@@ -719,6 +630,7 @@ export default function VirtualTryOn() {
         const jitterSpike = jitter > OCCL_JITTER_THRESH;
         const fastHeadMove = headVel > HEAD_VEL_THRESH;
 
+        // 3) Depth noise
         const lipZ = Array.from(LIP_LANDMARK_INDICES).map((i) => (drawLm[i].z || 0));
         const zStd = stddev(lipZ);
         const zNoisy = zStd > OCCL_Z_STD_THRESH;
@@ -760,18 +672,10 @@ export default function VirtualTryOn() {
           showMakeupRef.current = false;
         }
 
-        // Optional overlay pass removed to prevent double-compositing shimmer
-        if (USE_OVERLAY_PASS && selectedColorRef.current !== "transparent" && showMakeupRef.current) {
-          const bboxCss = computeBBox(outerRing);
-          let outerFitted = outerRing;
-          if (AUTO_FIT_MASK) {
-            const pct = adaptivePctFromBBox(bboxCss.w, bboxCss.h);
-            const amount = pct * Math.max(bboxCss.w, bboxCss.h);
-            outerFitted = offsetClosedPolygon(outerRing, amount);
-          }
-          const path = makePathFromRings(outerFitted, innerRing);
+        if (selectedColorRef.current !== "transparent" && showMakeupRef.current) {
+          const path = makePathFromRings(outerRing, innerRing);
           backCtx.globalCompositeOperation = "multiply";
-          backCtx.globalAlpha = 0.0; // disabled
+          backCtx.globalAlpha = 0.28;
           backCtx.fillStyle = selectedColorRef.current;
           backCtx.filter = "none";
           backCtx.fill(path, "evenodd");
@@ -782,7 +686,7 @@ export default function VirtualTryOn() {
         if (selectedColorRef.current !== "transparent" && showMakeupRef.current) {
           if (frameCountRef.current % COLORIZE_EVERY_N_FRAMES === 0) {
             const bbox = computeBBox(outer_px);
-            const pad = Math.min(MAX_BBOX_PAD, Math.max(2, Math.round(Math.max(bbox.w, bbox.h) * 0.06)));
+            const pad = Math.min(MAX_BBOX_PAD, Math.max(2, Math.round(Math.max(bbox.w, bbox.h) * 0.04)));
             const bx = Math.max(0, Math.floor(bbox.x - pad));
             const by = Math.max(0, Math.floor(bbox.y - pad));
             const bw = Math.min(w - bx, Math.ceil(bbox.w + pad * 2));
@@ -798,26 +702,11 @@ export default function VirtualTryOn() {
             mctx.setTransform(1, 0, 0, 1, 0, 0);
             mctx.clearRect(0, 0, sw, sh);
             mctx.save();
-            const toDevice = (p) => ({ x: (p.x - bx) * DPR, y: (p.y - by) * DPR }); // keep subpixel precision
-            let outerD = outer_px.map(toDevice);
+            const toDevice = (p) => ({ x: Math.round((p.x - bx) * DPR), y: Math.round((p.y - by) * DPR) });
+            const outerD = outer_px.map(toDevice);
             const innerD = inner_px.map(toDevice);
-
-            // === Auto-fit outer ring in DEVICE pixel space ===
-            if (AUTO_FIT_MASK) {
-              const bb = computeBBox(outerD);
-              const pct = adaptivePctFromBBox(bb.w, bb.h);
-              const amount = pct * Math.max(bb.w, bb.h);
-              outerD = offsetClosedPolygon(outerD, amount);
-            }
-
             const maskPath = makePathFromRings(outerD, innerD);
-
-            // Dynamic feathering with EMA to avoid pumping
-            const rawFeather = Math.max(0.8, Math.min(1.6, Math.max(bw * DPR, bh * DPR) * 0.005));
-            if (edgeFeatherEmaRef.current == null) edgeFeatherEmaRef.current = rawFeather;
-            const edgeFeatherPx = edgeFeatherEmaRef.current = edgeFeatherEmaRef.current * (1 - FEATHER_EMA_ALPHA) + rawFeather * FEATHER_EMA_ALPHA;
-
-            mctx.filter = `blur(${edgeFeatherPx}px)`;
+            mctx.filter = `blur(${EDGE_FEATHER_PX * DPR}px)`;
             mctx.fillStyle = "#fff";
             mctx.fill(maskPath, "evenodd");
             mctx.restore();
@@ -885,28 +774,6 @@ export default function VirtualTryOn() {
       boxes.push(rectPad(r, padPx));
     }
     return boxes;
-  }
-
-  function lipsArePresent(outer_px, frameW, frameH) {
-    if (!outer_px || outer_px.length < 8) return false;
-
-    const bbox = computeBBox(outer_px);
-    if (bbox.w < 4 || bbox.h < 4) return false;
-
-    const bleed = 2;
-    const inFrame = bbox.x >= -bleed && bbox.y >= -bleed &&
-                    bbox.x + bbox.w <= frameW + bleed &&
-                    bbox.y + bbox.h <= frameH + bleed;
-    if (!inFrame) return false;
-
-    const aspect = Math.max(bbox.w / bbox.h, bbox.h / bbox.w);
-    if (aspect > MAX_LIP_ASPECT) return false;
-
-    const polyArea = polygonArea(outer_px);
-    const pct = polyArea / (frameW * frameH);
-    if (pct < MIN_LIP_AREA_PCT || pct > MAX_LIP_AREA_PCT) return false;
-
-    return true;
   }
 
   function takeSnapshot() {
