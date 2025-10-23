@@ -40,14 +40,16 @@ const MAX_LIP_SMOOTHING = 0.92;
 const POSITION_SNAP_THRESHOLD = 0.006;
 
 // Visuals
-const EDGE_FEATHER_PX = 0.9;
+const EDGE_FEATHER_PX = 1.2;                 // slightly softer edge
+const LIP_MASK_EXPAND_PCT = 0.20;            // expand outer ring ~20% to fit fuller lips
 const BASE_OPACITY = 0.84;
 const SHADOW_BOOST = 0.20;
 const DPR_LIMIT = 2;
 
 // Performance
 const COLORIZE_EVERY_N_FRAMES = 1;
-const MAX_BBOX_PAD = 8;
+const MAX_BBOX_PAD = 24;                      // larger sampling window for big lips
+const COLOR_PAD_RATIO = 0.08;                 // pad relative to lip bbox size
 
 /* -------------------------- LIP VISIBILITY GATING ------------------------ */
 const LIP_ON_FRAMES = 2;
@@ -55,16 +57,17 @@ const LIP_OFF_FRAMES = 2;      // faster hide fallback
 const MIN_LIP_AREA_PCT = 0.00015;
 const MAX_LIP_AREA_PCT = 0.12;
 const MAX_LIP_ASPECT = 28;
-const STICKY_HOLD_FRAMES = 16;  // shorter grace window
+const STICKY_HOLD_FRAMES = 16;  // keep on through small hiccups
+const FACE_LOST_HIDE_AFTER_FRAMES = 30; // grace when FaceMesh drops (~1s @30fps)
 
 /* ------------------------- OCCLUSION HEURISTICS -------------------------- */
-// If any trigger, hide only after a short sustain window (avoids head-move flicker)
-const AREA_EMA_ALPHA = 0.18;         // EMA smoothing for lip area (slower = less false occlusion)
-const OCCL_AREA_DROP = 0.55;         // require >55% area drop vs EMA => possible occlusion
+// If any trigger, hide only after sustain window (avoids head-move flicker)
+const AREA_EMA_ALPHA = 0.18;         // EMA smoothing for lip area
+const OCCL_AREA_DROP = 0.55;         // >55% drop vs EMA => possible occlusion
 const OCCL_JITTER_THRESH = 0.05;     // centroid jump >5% of diag
 const OCCL_Z_STD_THRESH = 0.02;      // depth noise high
-const OCCL_MIN_FRAMES = 3;           // require N consecutive frames before hiding (non-hand occlusion)
-const HEAD_VEL_THRESH = 0.03;        // if lips centroid moving >3% diag, forgive transient area/jitter spikes
+const OCCL_MIN_FRAMES = 3;           // require N consecutive frames
+const HEAD_VEL_THRESH = 0.03;        // ignore spikes during fast head turns
 // Hand overlap: if hand bbox overlaps >=10% of lip bbox area => occluded (instant hide)
 const HAND_OVERLAP_RATIO = 0.10;
 const HAND_BBOX_PAD_PX = 10;
@@ -302,6 +305,7 @@ export default function VirtualTryOn() {
   const occlCentroidEmaRef = useRef(null);
   const occlPrevCentroidRef = useRef(null);
   const occlStreakRef = useRef(0);
+  const faceLostStreakRef = useRef(0);
 
   useEffect(() => {
     const { style } = document.body;
@@ -411,7 +415,9 @@ export default function VirtualTryOn() {
     // Reset occlusion state
     occlAreaEmaRef.current = null;
     occlCentroidEmaRef.current = null;
+    occlPrevCentroidRef.current = null;
     occlStreakRef.current = 0;
+    faceLostStreakRef.current = 0;
 
     window.removeEventListener("resize", setupCanvas);
     window.removeEventListener("orientationchange", setupCanvas);
@@ -588,16 +594,17 @@ export default function VirtualTryOn() {
         const innerU = getLipPoints(drawLm, UPPER_LIP_INNER, w, h);
         const innerL = getLipPoints(drawLm, LOWER_LIP_INNER, w, h);
 
-        const outerRing = smoothPolyline([...outerU, ...outerL.slice().reverse()], 1);
-        const innerRing = smoothPolyline([...innerU, ...innerL.slice().reverse()], 1);
+        // IMPORTANT: don't shrink lips with smoothing; keep exact shape
+        const outerRing = smoothPolyline([...outerU, ...outerL.slice().reverse()], 0);
+        const innerRing = smoothPolyline([...innerU, ...innerL.slice().reverse()], 0);
 
         const outerU_px = getLipPointsPx(drawLm, UPPER_LIP_OUTER, w, h);
         const outerL_px = getLipPointsPx(drawLm, LOWER_LIP_OUTER, w, h);
         const innerU_px = getLipPointsPx(drawLm, UPPER_LIP_INNER, w, h);
         const innerL_px = getLipPointsPx(drawLm, LOWER_LIP_INNER, w, h);
 
-        const outer_px = smoothPolyline([...outerU_px, ...outerL_px.slice().reverse()], 1);
-        const inner_px = smoothPolyline([...innerU_px, ...innerL_px.slice().reverse()], 1);
+        const outer_px = smoothPolyline([...outerU_px, ...outerL_px.slice().reverse()], 0);
+        const inner_px = smoothPolyline([...innerU_px, ...innerL_px.slice().reverse()], 0);
 
         const hasRaw = !!latestResultsRef.current?.multiFaceLandmarks?.[0];
         const lipsVisibleNow = hasRaw && lipsArePresent(outer_px, w, h);
@@ -648,10 +655,16 @@ export default function VirtualTryOn() {
         }
         // -------------------------------------------------------------
 
-        if (lipsVisibleNow && !HARD_OCCLUSION) {
+        // Track FaceMesh dropouts for flicker forgiveness
+        if (!hasRaw) faceLostStreakRef.current++; else faceLostStreakRef.current = 0;
+
+        // In hand-only mode, consider presence if FaceMesh is present
+        const baseVisible = (ONLY_HIDE_ON_HAND ? hasRaw : lipsVisibleNow) && !HARD_OCCLUSION;
+
+        if (baseVisible) {
           goodStreakRef.current = Math.min(LIP_ON_FRAMES, goodStreakRef.current + 1);
           badStreakRef.current = 0;
-          holdFramesRef.current = STICKY_HOLD_FRAMES; // only when not occluded
+          holdFramesRef.current = STICKY_HOLD_FRAMES;
         } else {
           badStreakRef.current = Math.min(LIP_OFF_FRAMES, badStreakRef.current + 1);
           goodStreakRef.current = 0;
@@ -660,10 +673,10 @@ export default function VirtualTryOn() {
 
         if (HARD_OCCLUSION) {
           holdFramesRef.current = 0;
-          showMakeupRef.current = false; // INSTANT HIDE
+          showMakeupRef.current = false; // INSTANT HIDE on hand overlap
         }
 
-        const gatedVisible = (lipsVisibleNow && !HARD_OCCLUSION) || holdFramesRef.current > 0;
+        const gatedVisible = (!HARD_OCCLUSION) && ( baseVisible || holdFramesRef.current > 0 || faceLostStreakRef.current < FACE_LOST_HIDE_AFTER_FRAMES );
 
         if (!showMakeupRef.current && gatedVisible && goodStreakRef.current >= LIP_ON_FRAMES) {
           showMakeupRef.current = true;
@@ -673,7 +686,13 @@ export default function VirtualTryOn() {
         }
 
         if (selectedColorRef.current !== "transparent" && showMakeupRef.current) {
-          const path = makePathFromRings(outerRing, innerRing);
+          // Expand outer ring a bit so coverage fits fuller lips
+          const oc2 = computeCentroid(outerRing);
+          const outerRingExp = outerRing.map(p => ({
+            x: oc2.x + (p.x - oc2.x) * (1 + LIP_MASK_EXPAND_PCT),
+            y: oc2.y + (p.y - oc2.y) * (1 + LIP_MASK_EXPAND_PCT),
+          }));
+          const path = makePathFromRings(outerRingExp, innerRing);
           backCtx.globalCompositeOperation = "multiply";
           backCtx.globalAlpha = 0.28;
           backCtx.fillStyle = selectedColorRef.current;
@@ -686,7 +705,7 @@ export default function VirtualTryOn() {
         if (selectedColorRef.current !== "transparent" && showMakeupRef.current) {
           if (frameCountRef.current % COLORIZE_EVERY_N_FRAMES === 0) {
             const bbox = computeBBox(outer_px);
-            const pad = Math.min(MAX_BBOX_PAD, Math.max(2, Math.round(Math.max(bbox.w, bbox.h) * 0.04)));
+            const pad = Math.min(MAX_BBOX_PAD, Math.max(2, Math.round(Math.max(bbox.w, bbox.h) * COLOR_PAD_RATIO)));
             const bx = Math.max(0, Math.floor(bbox.x - pad));
             const by = Math.max(0, Math.floor(bbox.y - pad));
             const bw = Math.min(w - bx, Math.ceil(bbox.w + pad * 2));
@@ -705,7 +724,9 @@ export default function VirtualTryOn() {
             const toDevice = (p) => ({ x: Math.round((p.x - bx) * DPR), y: Math.round((p.y - by) * DPR) });
             const outerD = outer_px.map(toDevice);
             const innerD = inner_px.map(toDevice);
-            const maskPath = makePathFromRings(outerD, innerD);
+            const oc = computeCentroid(outerD);
+            const outerDExp = outerD.map(p => ({ x: oc.x + (p.x - oc.x) * (1 + LIP_MASK_EXPAND_PCT), y: oc.y + (p.y - oc.y) * (1 + LIP_MASK_EXPAND_PCT) }));
+            const maskPath = makePathFromRings(outerDExp, innerD);
             mctx.filter = `blur(${EDGE_FEATHER_PX * DPR}px)`;
             mctx.fillStyle = "#fff";
             mctx.fill(maskPath, "evenodd");
