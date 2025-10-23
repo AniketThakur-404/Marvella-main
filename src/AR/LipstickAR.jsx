@@ -216,6 +216,43 @@ function stddev(arr) {
   return Math.sqrt(v);
 }
 
+/* ------------------------------ MOBILE HELPERS --------------------------- */
+function isiOS() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+async function ensureVideoReady(video) {
+  // Required on iOS to avoid fullscreen & autoplay blocks
+  video.setAttribute("playsinline", "true");
+  video.setAttribute("webkit-playsinline", "true");
+  video.setAttribute("muted", "");
+  video.setAttribute("autoplay", "");
+  video.muted = true;
+
+  try { await video.play(); } catch (_) {}
+
+  if (video.readyState >= 2) return;
+  await new Promise((resolve) => {
+    const onCanPlay = () => { video.removeEventListener("canplay", onCanPlay); resolve(); };
+    video.addEventListener("canplay", onCanPlay, { once: true });
+  });
+}
+
+async function tryOpenStream() {
+  // Try a few constraint fallbacks for Android/iOS
+  const tries = [
+    { video: { facingMode: { ideal: "user" }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 60 } }, audio: false },
+    { video: { facingMode: "user" }, audio: false },
+    { video: { facingMode: { ideal: "environment" } }, audio: false },
+    { video: true, audio: false },
+  ];
+  let lastError = null;
+  for (const c of tries) {
+    try { return await navigator.mediaDevices.getUserMedia(c); } catch (e) { lastError = e; }
+  }
+  throw lastError || new Error("getUserMedia failed");
+}
+
 /* ------------------------------ COMPONENT -------------------------------- */
 export default function VirtualTryOn() {
   const videoRef = useRef(null);
@@ -273,11 +310,12 @@ export default function VirtualTryOn() {
     const script = document.createElement("script");
     script.src = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
     script.crossOrigin = "anonymous";
+    script.async = true;
+    script.defer = true;
     script.onload = () => setFmLoaded(true);
+    script.onerror = () => setError("Failed to load FaceMesh. Check network/HTTPS.");
     document.head.appendChild(script);
-    return () => {
-      if (script && script.parentNode) script.parentNode.removeChild(script);
-    };
+    return () => { if (script && script.parentNode) script.parentNode.removeChild(script); };
   }, []);
 
   // Load Hands
@@ -285,16 +323,17 @@ export default function VirtualTryOn() {
     const script = document.createElement("script");
     script.src = "https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js";
     script.crossOrigin = "anonymous";
+    script.async = true;
+    script.defer = true;
     script.onload = () => setHandsLoaded(true);
+    script.onerror = () => setError("Failed to load Hands. Check network/HTTPS.");
     document.head.appendChild(script);
-    return () => {
-      if (script && script.parentNode) script.parentNode.removeChild(script);
-    };
+    return () => { if (script && script.parentNode) script.parentNode.removeChild(script); };
   }, []);
 
   // Init FaceMesh when loaded
   useEffect(() => {
-    if (!fmLoaded) return;
+    if (!fmLoaded || !window.FaceMesh) return;
     const faceMesh = new window.FaceMesh({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`,
     });
@@ -303,7 +342,7 @@ export default function VirtualTryOn() {
       refineLandmarks: true,
       minDetectionConfidence: 0.6,
       minTrackingConfidence: 0.6,
-      selfieMode: false,
+      selfieMode: false, // we handle mirroring ourselves
     });
     faceMesh.onResults((results) => {
       latestResultsRef.current = results;
@@ -317,31 +356,32 @@ export default function VirtualTryOn() {
 
   // Init Hands when loaded
   useEffect(() => {
-    if (!handsLoaded) return;
+    if (!handsLoaded || !window.Hands) return;
     const hands = new window.Hands({
       locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
     });
     hands.setOptions({
       maxNumHands: 2,
-      modelComplexity: 0,
+      modelComplexity: 0, // mobile friendly
       minDetectionConfidence: 0.6,
       minTrackingConfidence: 0.6,
-      selfieMode: false,
+      selfieMode: false, // we handle mirroring ourselves
     });
-    hands.onResults((results) => {
-      latestHandsRef.current = results;
-    });
+    hands.onResults((results) => { latestHandsRef.current = results; });
     handsRef.current = hands;
     return () => handsRef.current?.close?.();
   }, [handsLoaded]);
 
   useEffect(() => {
-    const onVis = () => { if (document.hidden) stopCamera(); };
+    const onVis = () => {
+      if (document.hidden) stopCamera();
+    };
     document.addEventListener("visibilitychange", onVis);
     return () => document.removeEventListener("visibilitychange", onVis);
   }, []);
 
   function stopCamera() {
+    // Stop frame loop
     if (afRef.current) {
       if ("cancelVideoFrameCallback" in HTMLVideoElement.prototype && videoRef.current?.cancelVideoFrameCallback) {
         try { videoRef.current.cancelVideoFrameCallback(afRef.current); } catch {}
@@ -350,12 +390,14 @@ export default function VirtualTryOn() {
       }
       afRef.current = null;
     }
+
+    // Stop tracks
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
-    smoothedLandmarksRef.current = null;
 
+    smoothedLandmarksRef.current = null;
     showMakeupRef.current = false;
     goodStreakRef.current = 0;
     badStreakRef.current = LIP_OFF_FRAMES;
@@ -365,44 +407,66 @@ export default function VirtualTryOn() {
     occlAreaEmaRef.current = null;
     occlCentroidEmaRef.current = null;
     occlStreakRef.current = 0;
+
+    window.removeEventListener("resize", setupCanvas);
+    window.removeEventListener("orientationchange", setupCanvas);
   }
 
   async function startCamera() {
-    if (!allLoaded) {
-      setError("Models are loading—try again in a moment.");
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("Camera not supported in this browser. Try Chrome/Edge on Android or Safari 15+ on iOS.");
       return;
     }
+    if (!allLoaded) {
+      setError("Models are loading—please try again in a moment.");
+      return;
+    }
+
     setError("");
     setStarted(true);
+
     try {
       stopCamera();
-      const constraints = {
-        video: {
-          facingMode: "user",
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30, max: 60 },
-          resizeMode: "crop-and-scale",
-        },
-        audio: false,
-      };
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+      // 1) Open stream with fallbacks (helps Android WebView & iOS)
+      const stream = await tryOpenStream();
       streamRef.current = stream;
 
+      // 2) Bind to video and make iOS happy
       const video = videoRef.current;
       video.setAttribute("playsinline", "true");
+      video.setAttribute("webkit-playsinline", "true");
+      video.setAttribute("muted", "");
+      video.setAttribute("autoplay", "");
       video.muted = true;
       video.srcObject = stream;
-      await new Promise((resolve) => (video.onloadedmetadata = () => { video.play(); resolve(); }));
+
+      // 3) Ensure the video can play (iOS can delay metadata)
+      await ensureVideoReady(video);
 
       setupCanvas();
       startProcessing();
+
       window.addEventListener("resize", setupCanvas);
       window.addEventListener("orientationchange", setupCanvas);
     } catch (e) {
       console.error(e);
-      setError("Camera access is required. Please allow camera permissions and refresh.");
+      const msg = String(e?.name || e?.message || e);
+      if (/NotAllowedError|Permission/i.test(msg)) {
+        setError(
+          isiOS()
+            ? "Camera permission denied. Go to Settings > Safari > Camera and allow access, then reload."
+            : "Camera permission denied. Allow camera permissions in your browser and reload."
+        );
+      } else if (/NotFoundError|DevicesNotFound/i.test(msg)) {
+        setError("No camera device found.");
+      } else if (/OverconstrainedError|Constraint/i.test(msg)) {
+        setError("Camera constraints not supported. Trying a simpler setup might help.");
+      } else {
+        setError("Camera access failed. Ensure you're on HTTPS and using a supported mobile browser.");
+      }
       setStarted(false);
+      stopCamera();
     }
   }
 
@@ -420,7 +484,8 @@ export default function VirtualTryOn() {
     canvas.width = Math.max(2, Math.floor(w * DPR));
     canvas.height = Math.max(2, Math.floor(h * DPR));
 
-    const ctx = canvas.getContext("2d", { alpha: true });
+    // Use willReadFrequently to avoid iOS memory spikes when calling getImageData
+    const ctx = canvas.getContext("2d", { alpha: true, willReadFrequently: true });
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
 
@@ -434,29 +499,21 @@ export default function VirtualTryOn() {
   function startProcessing() {
     const video = videoRef.current;
     const frontCanvas = canvasRef.current;
-    const frontCtx = frontCanvas.getContext("2d");
+    const frontCtx = frontCanvas.getContext("2d", { willReadFrequently: true });
     const backCanvas = backCanvasRef.current;
-    const backCtx = backCanvas.getContext("2d");
+    const backCtx = backCanvas.getContext("2d", { willReadFrequently: true });
     const DPR = Math.min(window.devicePixelRatio || 1, DPR_LIMIT);
 
     const step = async () => {
       if (!video || !faceMeshRef.current || !handsRef.current) return;
 
       if (video.readyState >= 2 && !sendingFaceRef.current) {
-        try {
-          sendingFaceRef.current = true;
-          await faceMeshRef.current.send({ image: video });
-        } finally {
-          sendingFaceRef.current = false;
-        }
+        try { sendingFaceRef.current = true; await faceMeshRef.current.send({ image: video }); }
+        finally { sendingFaceRef.current = false; }
       }
       if (video.readyState >= 2 && !sendingHandsRef.current) {
-        try {
-          sendingHandsRef.current = true;
-          await handsRef.current.send({ image: video });
-        } finally {
-          sendingHandsRef.current = false;
-        }
+        try { sendingHandsRef.current = true; await handsRef.current.send({ image: video }); }
+        finally { sendingHandsRef.current = false; }
       }
 
       const w = frontCanvas.width / DPR;
@@ -603,7 +660,7 @@ export default function VirtualTryOn() {
 
             const mCanvas = maskCanvasRef.current;
             mCanvas.width = sw; mCanvas.height = sh;
-            const mctx = mCanvas.getContext("2d");
+            const mctx = mCanvas.getContext("2d", { willReadFrequently: true });
             mctx.setTransform(1, 0, 0, 1, 0, 0);
             mctx.clearRect(0, 0, sw, sh);
             mctx.save();
@@ -695,9 +752,9 @@ export default function VirtualTryOn() {
   }
 
   return (
-    <div className="fixed inset-0 bg-gray-900 font-sans flex items-center justify-center">
+    <div className="fixed inset-0 bg-gray-900 font-sans flex items-center justify-center touch-manipulation select-none">
       <div className="relative w-full h-full bg-black flex items-center justify-center">
-        <video ref={videoRef} className="hidden" playsInline muted />
+        <video ref={videoRef} className="hidden" playsInline muted autoPlay />
         <canvas ref={canvasRef} className="max-w-full max-h-full object-cover rounded-lg" />
 
         {snapshot && (
@@ -729,7 +786,7 @@ export default function VirtualTryOn() {
           <div className="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-20 p-4">
             <button
               onClick={startCamera}
-              className="px-6 py-3 text-base sm:px-8 sm:py-4 sm:text-lg bg-white text-black rounded-full font-semibold transform hover:scale-105 transition-transform"
+              className="px-6 py-3 text-base sm:px-8 sm:py-4 sm:text-lg bg-white text-black rounded-full font-semibold transform hover:scale-105 active:scale-100 transition-transform"
             >
               Start Virtual Try-On
             </button>
