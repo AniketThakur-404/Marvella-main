@@ -52,10 +52,10 @@ const MAX_BBOX_PAD = 8;
 /* -------------------------- LIP VISIBILITY GATING ------------------------ */
 const LIP_ON_FRAMES = 2;
 const LIP_OFF_FRAMES = 2;      // faster hide fallback
-const MIN_LIP_AREA_PCT = 0.0004;
+const MIN_LIP_AREA_PCT = 0.00015;
 const MAX_LIP_AREA_PCT = 0.12;
-const MAX_LIP_ASPECT = 16;
-const STICKY_HOLD_FRAMES = 10;  // shorter grace window
+const MAX_LIP_ASPECT = 28;
+const STICKY_HOLD_FRAMES = 16;  // shorter grace window
 
 /* ------------------------- OCCLUSION HEURISTICS -------------------------- */
 // If any trigger, hide only after a short sustain window (avoids head-move flicker)
@@ -68,6 +68,8 @@ const HEAD_VEL_THRESH = 0.03;        // if lips centroid moving >3% diag, forgiv
 // Hand overlap: if hand bbox overlaps >=10% of lip bbox area => occluded (instant hide)
 const HAND_OVERLAP_RATIO = 0.10;
 const HAND_BBOX_PAD_PX = 10;
+// Feature flag: hide only when a hand overlaps the lips
+const ONLY_HIDE_ON_HAND = true;      // set to false to re-enable soft occlusion
 
 /* -------------------------- UTILITY: COLOR SPACE ------------------------- */
 function hexToRgb(hex) {
@@ -611,7 +613,7 @@ export default function VirtualTryOn() {
 
         // -------------------- OCCLUSION DETECTION --------------------
         // 1) Area drop vs EMA
-        const outerArea = polygonArea(outer_px); // px^2
+        const outerArea = polygonArea(outer_px);
         if (occlAreaEmaRef.current == null) occlAreaEmaRef.current = outerArea;
         occlAreaEmaRef.current = occlAreaEmaRef.current * (1 - AREA_EMA_ALPHA) + outerArea * AREA_EMA_ALPHA;
         const areaDrop = outerArea < occlAreaEmaRef.current * (1 - OCCL_AREA_DROP);
@@ -619,13 +621,11 @@ export default function VirtualTryOn() {
         // 2) Centroid jitter & head velocity
         const cNow = computeCentroid(outer_px);
         const diag = Math.hypot(w, h);
-        const prevC = occlPrevCentroidRef.current || cNow;
-        const headVel = Math.hypot(cNow.x - prevC.x, cNow.y - prevC.y) / diag;
-        occlPrevCentroidRef.current = cNow;
-
         if (occlCentroidEmaRef.current == null) occlCentroidEmaRef.current = { ...cNow };
+        const prevEx = occlCentroidEmaRef.current;
         occlCentroidEmaRef.current.x += (cNow.x - occlCentroidEmaRef.current.x) * 0.25;
         occlCentroidEmaRef.current.y += (cNow.y - occlCentroidEmaRef.current.y) * 0.25;
+        const headVel = Math.hypot(cNow.x - prevEx.x, cNow.y - prevEx.y) / diag;
         const jitter = Math.hypot(cNow.x - occlCentroidEmaRef.current.x, cNow.y - occlCentroidEmaRef.current.y) / diag;
         const jitterSpike = jitter > OCCL_JITTER_THRESH;
         const fastHeadMove = headVel > HEAD_VEL_THRESH;
@@ -635,14 +635,17 @@ export default function VirtualTryOn() {
         const zStd = stddev(lipZ);
         const zNoisy = zStd > OCCL_Z_STD_THRESH;
 
-        // Combine: forgive area/jitter spikes during fast head movements
         const softOcclusionNow = (areaDrop && !fastHeadMove) || (jitterSpike && !fastHeadMove) || zNoisy;
 
-        if (hasRaw && (handOverlapNow || softOcclusionNow)) occlStreakRef.current++;
-        else occlStreakRef.current = 0;
-
-        // Hand-over-mouth => instant hide. Other occlusion signals require sustain.
-        const HARD_OCCLUSION = handOverlapNow || occlStreakRef.current >= OCCL_MIN_FRAMES;
+        let HARD_OCCLUSION;
+        if (ONLY_HIDE_ON_HAND) {
+          HARD_OCCLUSION = handOverlapNow;
+          occlStreakRef.current = 0; // ignore soft occlusion entirely
+        } else {
+          const occludedNow = hasRaw && (handOverlapNow || softOcclusionNow);
+          if (occludedNow || !lipsVisibleNow) occlStreakRef.current++; else occlStreakRef.current = 0;
+          HARD_OCCLUSION = handOverlapNow || occlStreakRef.current >= OCCL_MIN_FRAMES;
+        }
         // -------------------------------------------------------------
 
         if (lipsVisibleNow && !HARD_OCCLUSION) {
