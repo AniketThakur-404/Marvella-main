@@ -1,8 +1,4 @@
-// FIX: Resolve "Identifier 'React' has already been declared" by removing the
-// default React import (React 17+ JSX runtime doesn't need it). Keep hooks-only
-// import to avoid duplicate identifiers when the host file also imports React.
-// Also adds smoke tests and keeps no-drift, fast-tracking lipstick behavior.
-
+// VirtualTryOn.jsx
 import { useEffect, useRef, useState } from "react";
 
 /* =============================== SHADES ================================== */
@@ -82,12 +78,13 @@ const FEATHER_EMA_ALPHA = 0.25;
 const FADE_IN_MS = 90;
 const FADE_OUT_MS = 80;
 
-// Idle restart
-const IDLE_RESTART_MS = 15000;
-const MOTION_WAKE_THRESH = 0.004;
+// Flicker tamers (NEW)
+const LIP_AREA_ON_MULT  = 1.15; // a bit more area to turn ON
+const LIP_AREA_OFF_MULT = 0.85; // a bit less area to stay ON before OFF
+const HAND_OCCL_ON_FRAMES = 2;  // N consecutive frames of hand overlap to hide
 
 /* ========================== ROBUST MODEL LOADER =========================== */
-// Version-pinned + CDN fallbacks to avoid “models loading” stall
+// Version-pinned + CDN fallbacks
 const FACE_MESH_URLS = [
   "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/face_mesh.js",
   "https://unpkg.com/@mediapipe/face_mesh@0.4/face_mesh.js",
@@ -261,6 +258,34 @@ function lipsArePresent(outer_px, frameW, frameH) {
   const pct = polygonArea(outer_px) / (frameW * frameH);
   return pct >= MIN_LIP_AREA_PCT && pct <= MAX_LIP_AREA_PCT;
 }
+// Hysteresis version (NEW)
+function lipsArePresentHysteresis(outer_px, frameW, frameH, wasVisible) {
+  if (!outer_px || outer_px.length < 8) return false;
+  const bbox = computeBBox(outer_px);
+  if (bbox.w < 4 || bbox.h < 4) return false;
+
+  const bleed = 2;
+  const inFrame = bbox.x >= -bleed && bbox.y >= -bleed &&
+                  bbox.x + bbox.w <= frameW + bleed &&
+                  bbox.y + bbox.h <= frameH + bleed;
+  if (!inFrame) return false;
+
+  const aspect = Math.max(bbox.w / bbox.h, bbox.h / bbox.w);
+  if (aspect > MAX_LIP_ASPECT) return false;
+
+  const pct = polygonArea(outer_px) / (frameW * frameH);
+
+  const minOn  = MIN_LIP_AREA_PCT * LIP_AREA_ON_MULT;
+  const minOff = MIN_LIP_AREA_PCT * LIP_AREA_OFF_MULT;
+  const maxOn  = MAX_LIP_AREA_PCT * 0.95;
+  const maxOff = MAX_LIP_AREA_PCT * 1.05;
+
+  if (wasVisible) {
+    return pct >= minOff && pct <= maxOff;
+  } else {
+    return pct >= minOn && pct <= maxOn;
+  }
+}
 // Temporal EMA for polygon
 function smoothTemporal(prev, curr, alpha) {
   if (!prev || prev.length !== curr.length) return curr.slice();
@@ -278,7 +303,7 @@ function stabilizeWithMotion(prev, curr) {
   const bbCurr = computeBBox(curr);
   const sPrev = Math.max(bbPrev.w, bbPrev.h) || 1;
   const sCurr = Math.max(bbCurr.w, bbCurr.h) || 1;
-  const scale = Math.max(0.90, Math.min(1.15, sCurr / sPrev)); // less warping → less lag
+  const scale = Math.max(0.90, Math.min(1.15, sCurr / sPrev));
   const n = curr.length;
   const out = new Array(n);
   for (let i = 0; i < n; i++) {
@@ -287,13 +312,51 @@ function stabilizeWithMotion(prev, curr) {
       x: cCurr.x + (pPrev.x - cPrev.x) * scale,
       y: cCurr.y + (pPrev.y - cPrev.y) * scale
     };
-    // Heavier weight on current frame (75%), previous (25%) just to de-jitter
     out[i] = {
       x: warpedPrev.x * 0.25 + curr[i].x * 0.75,
       y: warpedPrev.y * 0.25 + curr[i].y * 0.75
     };
   }
   return out;
+}
+
+/* ============================ AR INIT HELPERS ============================= */
+function initFaceMeshIfReady(faceMeshRef, latestResultsRef, lastGoodLandmarksRef) {
+  if (faceMeshRef.current || !window.FaceMesh) return false;
+  const faceMesh = new window.FaceMesh({
+    locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}`,
+  });
+  faceMesh.setOptions({
+    maxNumFaces: 1,
+    refineLandmarks: true,
+    minDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.72,
+    selfieMode: false,
+  });
+  faceMesh.onResults((results) => {
+    latestResultsRef.current = results;
+    if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+      lastGoodLandmarksRef.current = results.multiFaceLandmarks[0];
+    }
+  });
+  faceMeshRef.current = faceMesh;
+  return true;
+}
+function initHandsIfReady(handsRef, latestHandsRef) {
+  if (handsRef.current || !window.Hands) return false;
+  const hands = new window.Hands({
+    locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}`,
+  });
+  hands.setOptions({
+    maxNumHands: 2,
+    modelComplexity: 0,
+    minDetectionConfidence: 0.6,
+    minTrackingConfidence: 0.6,
+    selfieMode: false,
+  });
+  hands.onResults((results) => { latestHandsRef.current = results; });
+  handsRef.current = hands;
+  return true;
 }
 
 /* ============================ MOBILE HELPERS ============================== */
@@ -330,7 +393,6 @@ const __testsRan = { v: false };
 function runSmokeTests() {
   if (__testsRan.v) return; __testsRan.v = true;
   try {
-    // hexToRgb
     const rr = hexToRgb("#ff0000");
     console.assert(rr.r === 255 && rr.g === 0 && rr.b === 0, "hexToRgb failed");
     const rr3 = hexToRgb("#0f0");
@@ -338,12 +400,10 @@ function runSmokeTests() {
     const rrt = hexToRgb("transparent");
     console.assert(rrt.a === 0, "hexToRgb transparent failed");
 
-    // rgb↔hsl round trip (approx)
     const hsl = rgbToHsl(120, 60, 30);
     const rgb = hslToRgb(hsl.h, hsl.s, hsl.l);
     console.assert(Math.abs(rgb.r - 120) < 10 && Math.abs(rgb.g - 60) < 10 && Math.abs(rgb.b - 30) < 10, "HSL round trip approx failed");
 
-    // geometry
     const pts = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];
     console.assert(Math.abs(polygonArea(pts) - 100) < 1e-6, "polygonArea failed");
     const bb = computeBBox(pts);
@@ -351,7 +411,6 @@ function runSmokeTests() {
     const inter = rectIntersectArea({x:0,y:0,w:5,h:5},{x:3,y:3,w:5,h:5});
     console.assert(inter === 4, "rectIntersectArea failed");
 
-    // stabilizeWithMotion length and mapping
     const out = stabilizeWithMotion(pts, pts.map(p=>({x:p.x+1,y:p.y})));
     console.assert(out.length === pts.length, "stabilize length mismatch");
   } catch (e) {
@@ -417,9 +476,9 @@ export default function VirtualTryOn() {
   const prevInnerPxRef  = useRef(null);
   const edgeFeatherEmaRef = useRef(null);
 
-  // Idle restart
-  const lastMotionAtRef = useRef(performance.now());
-  const idleRestartingRef = useRef(false);
+  // NEW: visibility + hand occlusion debounce state
+  const lipsVisibleRef = useRef(false);
+  const handOverlapOnStreakRef = useRef(0);
 
   useEffect(() => {
     const { style } = document.body;
@@ -428,7 +487,7 @@ export default function VirtualTryOn() {
     return () => { style.overflow = prev; };
   }, []);
 
-  // Optional eager loaders (stateful), but we’ll also call ensureModels on Start.
+  // Optional eager loaders (stateful)
   useEffect(() => {
     const s = document.createElement("script");
     s.src = FACE_MESH_URLS[0];
@@ -448,30 +507,20 @@ export default function VirtualTryOn() {
     return () => { if (s && s.parentNode) s.parentNode.removeChild(s); };
   }, []);
 
-  // Init FaceMesh
+  // NEW: Poll-based initializer ensures AR starts whether eager scripts or fallbacks load first.
   useEffect(() => {
-    if (!window.FaceMesh) return;
-    const faceMesh = new window.FaceMesh({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${f}` });
-    faceMesh.setOptions({ maxNumFaces: 1, refineLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.72, selfieMode: false });
-    faceMesh.onResults((results) => {
-      latestResultsRef.current = results;
-      if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-        lastGoodLandmarksRef.current = results.multiFaceLandmarks[0];
+    let cancelled = false;
+    const POLL_MS = 350;
+    const tryInit = () => {
+      initFaceMeshIfReady(faceMeshRef, latestResultsRef, lastGoodLandmarksRef);
+      initHandsIfReady(handsRef, latestHandsRef);
+      if (!cancelled && (!faceMeshRef.current || !handsRef.current)) {
+        setTimeout(tryInit, POLL_MS);
       }
-    });
-    faceMeshRef.current = faceMesh;
-    return () => faceMeshRef.current?.close?.();
-  }, [fmLoaded]);
-
-  // Init Hands
-  useEffect(() => {
-    if (!window.Hands) return;
-    const hands = new window.Hands({ locateFile: (f) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
-    hands.setOptions({ maxNumHands: 2, modelComplexity: 0, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6, selfieMode: false });
-    hands.onResults((results) => { latestHandsRef.current = results; });
-    handsRef.current = hands;
-    return () => handsRef.current?.close?.();
-  }, [handsLoaded]);
+    };
+    tryInit();
+    return () => { cancelled = true; };
+  }, []);
 
   // Auto-resume when tab returns if user had started
   useEffect(() => {
@@ -543,6 +592,9 @@ export default function VirtualTryOn() {
         return;
       }
       setError("");
+      // Kick init immediately after fallbacks load
+      initFaceMeshIfReady(faceMeshRef, latestResultsRef, lastGoodLandmarksRef);
+      initHandsIfReady(handsRef, latestHandsRef);
     }
 
     wantsRunningRef.current = true;
@@ -622,14 +674,6 @@ export default function VirtualTryOn() {
       const dt = Math.max(0.001, (now - (lastTimeRef.current || now)) / 1000);
       lastTimeRef.current = now;
 
-      // Idle auto-restart
-      if (!idleRestartingRef.current && now - lastMotionAtRef.current > IDLE_RESTART_MS && wantsRunningRef.current) {
-        idleRestartingRef.current = true;
-        await startCamera();
-        idleRestartingRef.current = false;
-        return;
-      }
-
       // Always run hands; freeze face during occlusion to avoid jitter
       if (video.readyState >= 2 && !sendingHandsRef.current && handsRef.current) {
         try { sendingHandsRef.current = true; await handsRef.current.send({ image: video }); }
@@ -663,7 +707,6 @@ export default function VirtualTryOn() {
               const planar = Math.hypot(dx, dy);
               const ratio = Math.min(1, planar / POSITION_SNAP_THRESHOLD);
               const blend = MIN_LIP_SMOOTHING + (MAX_LIP_SMOOTHING - MIN_LIP_SMOOTHING) * ratio;
-              // velocity kick to counteract lag on quick mouth motions
               s.x += (c.x - s.x) * blend + dx * 0.08;
               s.y += (c.y - s.y) * blend + dy * 0.08;
               s.z += (c.z - s.z) * (blend * 0.5);
@@ -706,7 +749,9 @@ export default function VirtualTryOn() {
         innerRing = smoothTemporal(prevInnerCssRef.current, innerRing, MASK_EASE_ALPHA);
 
         const hasRaw = !!latestResultsRef.current?.multiFaceLandmarks?.[0];
-        const lipsVisibleNow = hasRaw && lipsArePresent(outer_px, w, h);
+
+        // NEW: hysteresis-based visibility
+        const lipsVisibleNow = hasRaw && lipsArePresentHysteresis(outer_px, w, h, lipsVisibleRef.current);
 
         // Hands (mirrored)
         const handBoxes = getHandBBoxesMirrored(latestHandsRef.current, w, h, HAND_BBOX_PAD_PX);
@@ -739,16 +784,19 @@ export default function VirtualTryOn() {
 
         let HARD_OCCLUSION;
         if (ONLY_HIDE_ON_HAND) {
-          HARD_OCCLUSION = handOverlapNow;
+          // NEW: debounce entering occluded state
+          if (handOverlapNow) {
+            handOverlapOnStreakRef.current = Math.min(HAND_OCCL_ON_FRAMES, handOverlapOnStreakRef.current + 1);
+          } else {
+            handOverlapOnStreakRef.current = 0;
+          }
+          HARD_OCCLUSION = handOverlapOnStreakRef.current >= HAND_OCCL_ON_FRAMES;
           occlStreakRef.current = 0;
         } else {
           const occludedNow = hasRaw && (handOverlapNow || softOcclusionNow);
           if (occludedNow || !lipsVisibleNow) occlStreakRef.current++; else occlStreakRef.current = 0;
           HARD_OCCLUSION = handOverlapNow || occlStreakRef.current >= OCCL_MIN_FRAMES;
         }
-
-        // Motion → keep idle watchdog awake
-        if (headVel > MOTION_WAKE_THRESH) lastMotionAtRef.current = now;
 
         // Unfreeze face updates after hands leave for 2 frames
         if (!handOverlapNow) handFreeStreakRef.current++; else handFreeStreakRef.current = 0;
@@ -771,6 +819,9 @@ export default function VirtualTryOn() {
           occludedRef.current = true;    // skip faceMesh next frame
           holdFramesRef.current = 0;
         }
+
+        // Update remembered visibility for next-frame hysteresis
+        lipsVisibleRef.current = lipsVisibleNow;
 
         // Cache stabilized polygons when lips are visible (prevents freeze-lag)
         if (lipsVisibleNow) {
@@ -805,8 +856,8 @@ export default function VirtualTryOn() {
             mctx.clearRect(0, 0, sw, sh);
             mctx.save();
             const toDevice = (p) => ({ x: (p.x - bx) * DPR, y: (p.y - by) * DPR });
-            const outerD = drawOuter.map(toDevice);
-            const innerD = drawInner.map(toDevice);
+            const outerD = (drawOuter || []).map(toDevice);
+            const innerD = (drawInner || []).map(toDevice);
             const maskPath = makePathFromRings(outerD, innerD);
 
             const rawFeather = Math.max(0.8, Math.min(1.6, Math.max(bw * DPR, bh * DPR) * 0.005));
