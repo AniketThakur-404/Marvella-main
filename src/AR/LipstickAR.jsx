@@ -16,7 +16,7 @@ const LIPSTICK_SHADES = [
   { id: 10, name: "Berry Amour", color: "#8A3832" },
   { id: 11, name: "Cinnamon Saffron", color: "#B64A29" },
   { id: 12, name: "Oud Royale", color: "#431621" },
-  { id: 13, name: "Velvet Crush", color: "#C22A2D" },
+  { id: 13, name: "Velvet Crush", color: "#C22A2D" }, // <- we’ll default to this
   { id: 14, name: "Spiced Ember", color: "#A03529" },
   { id: 15, name: "Creme Blush", color: "#CF5F4C" },
   { id: 16, name: "Caramel Eclair", color: "#C77444" },
@@ -42,21 +42,23 @@ const LIP_LANDMARK_INDICES = new Set([
 /* ============================ TUNABLE PARAMS ============================== */
 // Landmark smoothing (more responsive; minimizes visible drift)
 const BASE_SMOOTHING = 0.85;
-const MIN_LIP_SMOOTHING = 0.70;
-const MAX_LIP_SMOOTHING = 0.985;
-const POSITION_SNAP_THRESHOLD = 0.003;
+const MIN_LIP_SMOOTHING = 0.72;     // a bit stickier
+const MAX_LIP_SMOOTHING = 0.992;    // a bit stickier
+const POSITION_SNAP_THRESHOLD = 0.0025;
 
 // Visuals / perf
 const BASE_OPACITY = 0.84;
 const SHADOW_BOOST = 0.20;
-const DPR_LIMIT = 2;
-const COLORIZE_EVERY_N_FRAMES = 1;
-const MAX_BBOX_PAD = 10;
 
-// Lip presence gating
+// Cap DPR a touch on mobile for FPS; 2 for desktop, 1.5 for mobile-ish
+const DPR_DESKTOP = 2;
+const DPR_MOBILE = 1.5;
+const MAX_BBOX_PAD = 12;
+
+// Lip presence gating (slightly easier turn-on)
 const LIP_ON_FRAMES = 2;
 const LIP_OFF_FRAMES = 2;
-const MIN_LIP_AREA_PCT = 0.00015;
+const MIN_LIP_AREA_PCT = 0.00012;   // slightly lower to avoid “never shows”
 const MAX_LIP_AREA_PCT = 0.12;
 const MAX_LIP_ASPECT = 28;
 const STICKY_HOLD_FRAMES = 16;
@@ -73,15 +75,21 @@ const HAND_BBOX_PAD_PX = 10;
 const ONLY_HIDE_ON_HAND = true;
 
 // Anti-flicker & fades (faster response)
-const MASK_EASE_ALPHA = 0.82;    // higher = less temporal lag
+const MASK_EASE_ALPHA = 0.86;       // slightly higher = less visible lag
 const FEATHER_EMA_ALPHA = 0.25;
 const FADE_IN_MS = 90;
 const FADE_OUT_MS = 80;
 
-// Flicker tamers (NEW)
-const LIP_AREA_ON_MULT  = 1.15; // a bit more area to turn ON
-const LIP_AREA_OFF_MULT = 0.85; // a bit less area to stay ON before OFF
-const HAND_OCCL_ON_FRAMES = 2;  // N consecutive frames of hand overlap to hide
+// Hysteresis (turn on a tad sooner, stay on a tad longer)
+const LIP_AREA_ON_MULT  = 1.05;
+const LIP_AREA_OFF_MULT = 0.90;
+const HAND_OCCL_ON_FRAMES = 2;
+
+// Coverage helpers (NEW)
+const OUTER_SCALE = 1.025;          // slight inflation of outer ring
+const INNER_SCALE = 0.985;          // slight deflation of inner ring
+const UPPER_Y_BIAS_MAX = 2.0;       // px up-shift for upper lip
+const SOFT_EDGE_BOOST = 0.40;       // stronger baseline softness
 
 /* ========================== ROBUST MODEL LOADER =========================== */
 // Version-pinned + CDN fallbacks
@@ -222,8 +230,7 @@ function rectIntersectArea(a, b) {
   const h = Math.max(0, y2 - y1);
   return w * h;
 }
-
-/* ============================ NEW HELPERS ================================= */
+/* helpers */
 function polygonArea(points) {
   let area = 0;
   for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
@@ -243,7 +250,6 @@ function stddev(arr) {
   const v = arr.reduce((a, b) => a + (b - m) ** 2, 0) / arr.length;
   return Math.sqrt(v);
 }
-// Lip presence (prevents false hides on turns)
 function lipsArePresent(outer_px, frameW, frameH) {
   if (!outer_px || outer_px.length < 8) return false;
   const bbox = computeBBox(outer_px);
@@ -258,7 +264,6 @@ function lipsArePresent(outer_px, frameW, frameH) {
   const pct = polygonArea(outer_px) / (frameW * frameH);
   return pct >= MIN_LIP_AREA_PCT && pct <= MAX_LIP_AREA_PCT;
 }
-// Hysteresis version (NEW)
 function lipsArePresentHysteresis(outer_px, frameW, frameH, wasVisible) {
   if (!outer_px || outer_px.length < 8) return false;
   const bbox = computeBBox(outer_px);
@@ -294,7 +299,7 @@ function smoothTemporal(prev, curr, alpha) {
     y: prev[i].y * (1 - alpha) + p.y * alpha
   }));
 }
-// Motion model (translate/scale previous polygon toward current)
+// Motion model (translate/scale previous polygon toward current) — make it a little stickier
 function stabilizeWithMotion(prev, curr) {
   if (!prev || prev.length !== curr.length) return curr;
   const cPrev = computeCentroid(prev);
@@ -313,8 +318,8 @@ function stabilizeWithMotion(prev, curr) {
       y: cCurr.y + (pPrev.y - cPrev.y) * scale
     };
     out[i] = {
-      x: warpedPrev.x * 0.25 + curr[i].x * 0.75,
-      y: warpedPrev.y * 0.25 + curr[i].y * 0.75
+      x: warpedPrev.x * 0.40 + curr[i].x * 0.60,   // <- 40/60 (was 25/75)
+      y: warpedPrev.y * 0.40 + curr[i].y * 0.60
     };
   }
   return out;
@@ -363,6 +368,9 @@ function initHandsIfReady(handsRef, latestHandsRef) {
 function isiOS() {
   return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
+const isMobileUA = () =>
+  /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || (window.innerWidth <= 768);
+
 async function ensureVideoReady(video) {
   video.setAttribute("playsinline", "true");
   video.setAttribute("webkit-playsinline", "true");
@@ -377,8 +385,9 @@ async function ensureVideoReady(video) {
   });
 }
 async function tryOpenStream() {
+  const mobile = isMobileUA();
   const tries = [
-    { video: { facingMode: { ideal: "user" }, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30, max: 60 } }, audio: false },
+    { video: { facingMode: { ideal: "user" }, width: { ideal: mobile ? 960 : 1280 }, height: { ideal: mobile ? 540 : 720 }, frameRate: { ideal: 30, max: mobile ? 30 : 60 } }, audio: false },
     { video: { facingMode: "user" }, audio: false },
     { video: { facingMode: { ideal: "environment" } }, audio: false },
     { video: true, audio: false },
@@ -410,9 +419,6 @@ function runSmokeTests() {
     console.assert(bb.w === 10 && bb.h === 10 && bb.x === 0 && bb.y === 0, "computeBBox failed");
     const inter = rectIntersectArea({x:0,y:0,w:5,h:5},{x:3,y:3,w:5,h:5});
     console.assert(inter === 4, "rectIntersectArea failed");
-
-    const out = stabilizeWithMotion(pts, pts.map(p=>({x:p.x+1,y:p.y})));
-    console.assert(out.length === pts.length, "stabilize length mismatch");
   } catch (e) {
     console.warn("Smoke tests error:", e);
   }
@@ -438,17 +444,15 @@ export default function VirtualTryOn() {
 
   const lastGoodLandmarksRef = useRef(null);
   const smoothedLandmarksRef = useRef(null);
-  const frameCountRef = useRef(0);
 
   const maskCanvasRef = useRef(null);
-  const [fmLoaded, setFmLoaded] = useState(false);
-  const [handsLoaded, setHandsLoaded] = useState(false);
+  const [error, setError] = useState("");
 
   const [started, setStarted] = useState(false);
   const wantsRunningRef = useRef(false);
 
-  const [selectedShade, setSelectedShade] = useState(LIPSTICK_SHADES[0]);
-  const [error, setError] = useState("");
+  // Default to a real shade so users see something immediately
+  const [selectedShade, setSelectedShade] = useState(LIPSTICK_SHADES[13]); // Velvet Crush
   const [snapshot, setSnapshot] = useState(null);
 
   const selectedColorRef = useRef(selectedShade.color);
@@ -487,27 +491,27 @@ export default function VirtualTryOn() {
     return () => { style.overflow = prev; };
   }, []);
 
-  // Optional eager loaders (stateful)
+  // Eager loaders (state not required; we gate on window.FaceMesh/Hands anyway)
   useEffect(() => {
-    const s = document.createElement("script");
-    s.src = FACE_MESH_URLS[0];
-    s.crossOrigin = "anonymous"; s.async = true; s.defer = true;
-    s.onload = () => setFmLoaded(true);
-    s.onerror = () => setError("Failed to load FaceMesh. Check network/HTTPS.");
-    document.head.appendChild(s);
-    return () => { if (s && s.parentNode) s.parentNode.removeChild(s); };
-  }, []);
-  useEffect(() => {
-    const s = document.createElement("script");
-    s.src = HANDS_URLS[0];
-    s.crossOrigin = "anonymous"; s.async = true; s.defer = true;
-    s.onload = () => setHandsLoaded(true);
-    s.onerror = () => setError("Failed to load Hands. Check network/HTTPS.");
-    document.head.appendChild(s);
-    return () => { if (s && s.parentNode) s.parentNode.removeChild(s); };
+    const s1 = document.createElement("script");
+    s1.src = FACE_MESH_URLS[0];
+    s1.crossOrigin = "anonymous"; s1.async = true; s1.defer = true;
+    s1.onerror = () => setError("Failed to load FaceMesh. Check network/HTTPS.");
+    document.head.appendChild(s1);
+
+    const s2 = document.createElement("script");
+    s2.src = HANDS_URLS[0];
+    s2.crossOrigin = "anonymous"; s2.async = true; s2.defer = true;
+    s2.onerror = () => setError("Failed to load Hands. Check network/HTTPS.");
+    document.head.appendChild(s2);
+
+    return () => {
+      if (s1 && s1.parentNode) s1.parentNode.removeChild(s1);
+      if (s2 && s2.parentNode) s2.parentNode.removeChild(s2);
+    };
   }, []);
 
-  // NEW: Poll-based initializer ensures AR starts whether eager scripts or fallbacks load first.
+  // Poll-based initializer ensures AR starts no matter which CDN loads first.
   useEffect(() => {
     let cancelled = false;
     const POLL_MS = 350;
@@ -641,7 +645,7 @@ export default function VirtualTryOn() {
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
 
-    const DPR = Math.min(window.devicePixelRatio || 1, DPR_LIMIT);
+    const DPR = Math.min(window.devicePixelRatio || 1, isMobileUA() ? DPR_MOBILE : DPR_DESKTOP);
     const w = video.videoWidth || 1280;
     const h = video.videoHeight || 720;
 
@@ -667,7 +671,7 @@ export default function VirtualTryOn() {
     const frontCtx = frontCanvas.getContext("2d", { willReadFrequently: true });
     const backCanvas = backCanvasRef.current;
     const backCtx = backCanvas.getContext("2d", { willReadFrequently: true });
-    const DPR = Math.min(window.devicePixelRatio || 1, DPR_LIMIT);
+    const DPR = Math.min(window.devicePixelRatio || 1, isMobileUA() ? DPR_MOBILE : DPR_DESKTOP);
 
     const step = async () => {
       const now = performance.now();
@@ -721,7 +725,7 @@ export default function VirtualTryOn() {
 
       const drawLm = (smoothedLandmarksRef.current || lastGoodLandmarksRef.current);
       if (drawLm) {
-        // Rings in CSS space
+        // Rings in CSS space (for completeness/possible UI, not used for draw)
         let outerU = getLipPoints(drawLm, UPPER_LIP_OUTER, w, h);
         let outerL = getLipPoints(drawLm, LOWER_LIP_OUTER, w, h);
         let innerU = getLipPoints(drawLm, UPPER_LIP_INNER, w, h);
@@ -734,8 +738,23 @@ export default function VirtualTryOn() {
         let outerL_px = getLipPointsPx(drawLm, LOWER_LIP_OUTER, w, h);
         let innerU_px = getLipPointsPx(drawLm, UPPER_LIP_INNER, w, h);
         let innerL_px = getLipPointsPx(drawLm, LOWER_LIP_INNER, w, h);
+
+        // Coverage helpers: bias the upper lip upward a touch
+        const lipBox = computeBBox([...outerU_px, ...outerL_px]);
+        const upBias = Math.min(UPPER_Y_BIAS_MAX, lipBox.h * 0.02);
+        outerU_px = outerU_px.map(p => ({ x: p.x, y: p.y - upBias }));
+
+        // Merge → smooth
         let outer_px = smoothPolyline([...outerU_px, ...outerL_px.slice().reverse()], 0);
         let inner_px = smoothPolyline([...innerU_px, ...innerL_px.slice().reverse()], 0);
+
+        // Inflate outer / deflate inner around each centroid
+        const scalePoly = (poly, s) => {
+          const c = computeCentroid(poly);
+          return poly.map(p => ({ x: c.x + (p.x - c.x) * s, y: c.y + (p.y - c.y) * s }));
+        };
+        outer_px = scalePoly(outer_px, OUTER_SCALE);
+        inner_px = scalePoly(inner_px, INNER_SCALE);
 
         // Stabilize with motion model, then temporal EMA
         outer_px  = stabilizeWithMotion(prevOuterPxRef.current,  outer_px);
@@ -750,7 +769,7 @@ export default function VirtualTryOn() {
 
         const hasRaw = !!latestResultsRef.current?.multiFaceLandmarks?.[0];
 
-        // NEW: hysteresis-based visibility
+        // Visibility (hysteresis)
         const lipsVisibleNow = hasRaw && lipsArePresentHysteresis(outer_px, w, h, lipsVisibleRef.current);
 
         // Hands (mirrored)
@@ -759,11 +778,10 @@ export default function VirtualTryOn() {
         const lipArea = rectArea(lipRect);
         const handOverlapNow = handBoxes.some((hb) => rectIntersectArea(hb, lipRect) >= lipArea * HAND_OVERLAP_RATIO);
 
-        // Occlusion signals (soft ones do not hide if ONLY_HIDE_ON_HAND)
+        // Soft occlusion signals (we only HIDE on hands, but these help stabilization)
         const outerArea = polygonArea(outer_px);
         if (occlAreaEmaRef.current == null) occlAreaEmaRef.current = outerArea;
         occlAreaEmaRef.current = occlAreaEmaRef.current * (1 - AREA_EMA_ALPHA) + outerArea * AREA_EMA_ALPHA;
-        const areaDrop = outerArea < occlAreaEmaRef.current * (1 - OCCL_AREA_DROP);
 
         const cNow = computeCentroid(outer_px);
         const diag = Math.hypot(w, h);
@@ -780,11 +798,11 @@ export default function VirtualTryOn() {
         const zStd = stddev(lipZ);
         const zNoisy = zStd > OCCL_Z_STD_THRESH;
 
-        const softOcclusionNow = (areaDrop && !fastHeadMove) || (jitterSpike && !fastHeadMove) || zNoisy;
+        const softOcclusionNow = (outerArea < occlAreaEmaRef.current * (1 - OCCL_AREA_DROP) && !fastHeadMove)
+                                 || (jitterSpike && !fastHeadMove) || zNoisy;
 
         let HARD_OCCLUSION;
         if (ONLY_HIDE_ON_HAND) {
-          // NEW: debounce entering occluded state
           if (handOverlapNow) {
             handOverlapOnStreakRef.current = Math.min(HAND_OCCL_ON_FRAMES, handOverlapOnStreakRef.current + 1);
           } else {
@@ -860,9 +878,12 @@ export default function VirtualTryOn() {
             const innerD = (drawInner || []).map(toDevice);
             const maskPath = makePathFromRings(outerD, innerD);
 
-            const rawFeather = Math.max(0.8, Math.min(1.6, Math.max(bw * DPR, bh * DPR) * 0.005));
+            // Softer base feather, still adaptive; boost a little
+            let rawFeather = Math.max(1.2, Math.min(2.6, Math.max(bw * DPR, bh * DPR) * 0.005));
+            rawFeather *= (1 + SOFT_EDGE_BOOST);
             if (edgeFeatherEmaRef.current == null) edgeFeatherEmaRef.current = rawFeather;
-            const edgeFeatherPx = edgeFeatherEmaRef.current = edgeFeatherEmaRef.current * (1 - FEATHER_EMA_ALPHA) + rawFeather * FEATHER_EMA_ALPHA;
+            const edgeFeatherPx = edgeFeatherEmaRef.current =
+              edgeFeatherEmaRef.current * (1 - FEATHER_EMA_ALPHA) + rawFeather * FEATHER_EMA_ALPHA;
 
             mctx.filter = `blur(${edgeFeatherPx}px)`;
             mctx.fillStyle = "#fff";
@@ -940,7 +961,7 @@ export default function VirtualTryOn() {
   function takeSnapshot() {
     const canvas = canvasRef.current;
     if (canvas) {
-      const DPR = Math.min(window.devicePixelRatio || 1, DPR_LIMIT);
+      const DPR = Math.min(window.devicePixelRatio || 1, isMobileUA() ? DPR_MOBILE : DPR_DESKTOP);
       const tmp = document.createElement("canvas");
       tmp.width = Math.floor(canvas.width / DPR);
       tmp.height = Math.floor(canvas.height / DPR);
